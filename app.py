@@ -577,13 +577,18 @@ def download(task_id):
 @app.route('/export-sheets/<task_id>', methods=['POST'])
 def export_sheets(task_id):
     r = RESULTS.get(task_id)
-    if not r or r.get('status') != 'complete': return jsonify({'error': 'Not complete'}), 400
-    sid = request.json.get('sheet_id', '').strip() or DEFAULT_SHEET_ID
+    if not r or r.get('status') != 'complete':
+        return jsonify({'error': 'Research not complete. Complete a research first.'}), 400
     try:
+        raw = request.json.get('sheet_id', '').strip()
+        sid = parse_sheet_id(raw) or GOOGLE_SHEET_ID_ENV
+        if not sid:
+            return jsonify({'error': 'No Google Sheet ID. Provide sheet_id in request, '
+                                    'or set GOOGLE_SHEET_ID environment variable.'}), 400
         url = write_to_google_sheets(sid, r)
         return jsonify({'url': url, 'sheet_id': sid})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e)[:300]}), 500
 
 def generate_excel(r):
     import openpyxl
@@ -632,24 +637,53 @@ def generate_excel(r):
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
+def parse_sheet_id(raw):
+    """Extract Google Sheet ID from a URL or plain ID."""
+    if not raw or not raw.strip():
+        return ''
+    sid = raw.strip().rstrip('/')
+    if '/d/' in sid:
+        sid = sid.split('/d/', 1)[1].split('/')[0]
+    for sep in ['/edit', '?gid=', '#gid=', '?usp=', '#']:
+        if sep in sid:
+            sid = sid.split(sep)[0]
+    return sid.strip()
+
+
+def get_google_service():
+    """Create Google Sheets service using Service Account from env var."""
+    import json
+    from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import build
+
+    sa_raw = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+    if not sa_raw:
+        raise Exception('GOOGLE_SERVICE_ACCOUNT_JSON environment variable not set. '
+                        'Create a Service Account in Google Cloud Console, '
+                        'share your sheet with its email, and set the JSON as this variable.')
+    try:
+        sa_info = json.loads(sa_raw)
+    except json.JSONDecodeError:
+        raise Exception('GOOGLE_SERVICE_ACCOUNT_JSON contains invalid JSON')
+    creds = Credentials.from_service_account_info(
+        sa_info, scopes=['https://www.googleapis.com/auth/spreadsheets'])
+    return build('sheets', 'v4', credentials=creds, cache_discovery=False)
+
+
+GOOGLE_SHEET_ID_ENV = os.environ.get('GOOGLE_SHEET_ID', '')
+
+
 def write_to_google_sheets(sheet_id, r):
     try:
-        from google.oauth2.credentials import Credentials
-        from google_auth_httplib2 import AuthorizedHttp
         from googleapiclient.discovery import build
-        import socks, httplib2
     except ImportError:
-        raise Exception('Google Sheets support not installed. Install: pip install google-api-python-client google-auth-httplib2 PySocks')
-    creds = Credentials.from_authorized_user_file(DEFAULT_TOKEN, ['https://www.googleapis.com/auth/spreadsheets'])
-    if PROXY_HOST:
-        proxy_info = httplib2.ProxyInfo(proxy_type=socks.PROXY_TYPE_HTTP, proxy_host=PROXY_HOST, proxy_port=PROXY_PORT)
-    else:
-        proxy_info = None
-    http_args = {'timeout': 60}
-    if proxy_info:
-        http_args['proxy_info'] = proxy_info
-    authorized_http = AuthorizedHttp(creds, http=httplib2.Http(**http_args))
-    svc = build('sheets', 'v4', http=authorized_http, cache_discovery=False)
+        raise Exception('Google Sheets support not installed. Install: pip install google-api-python-client')
+    svc = get_google_service()
+    sid = parse_sheet_id(sheet_id) or GOOGLE_SHEET_ID_ENV
+    if not sid:
+        raise Exception('No Google Sheet ID provided. Set GOOGLE_SHEET_ID env var or pass sheet_id.')
+    # Extract task params for the sheet name
+    kw = r.get('params', {}).get('keyword', 'research').replace(' ', '_')[:20]
 
     configs = [
         ('SERP_Pages', ['排名','页面标题','URL','Meta Description','H1','页面类型','主要主题','数据来源'],
