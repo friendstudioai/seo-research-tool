@@ -1,7 +1,4 @@
 flask>=3.0
 openpyxl>=3.1
-google-api-python-client>=2.120
-google-auth-httplib2>=0.4
-PySocks>=1.7
 requests>=2.31
 gunicorn>=21.2
