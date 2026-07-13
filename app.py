@@ -2,17 +2,24 @@
 """SEO Keyword Research Web App - Firecrawl + Google Sheets + Excel export."""
 
 import os, sys, re, json, io, threading, time, secrets, requests
-try:
-    import socks, httplib2
-except ImportError:
-    socks = None
-    httplib2 = None
-from flask import Flask, render_template, request, jsonify, send_file, make_response
-from google.oauth2.credentials import Credentials
-from google_auth_httplib2 import AuthorizedHttp
-from googleapiclient.discovery import build
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from flask import Flask, render_template, request, jsonify, send_file, make_response
+
+# Google Sheets support - optional. Missing packages only disable /export-sheets.
+try:
+    from google.oauth2.credentials import Credentials
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+    import socks, httplib2
+    GOOGLE_SHEETS_OK = True
+except ImportError:
+    Credentials = None
+    AuthorizedHttp = None
+    build = None
+    socks = None
+    httplib2 = None
+    GOOGLE_SHEETS_OK = False
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -21,8 +28,9 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CREDENTIALS = os.path.join(PROJECT_DIR, 'credentials.json')
 DEFAULT_TOKEN = os.path.join(PROJECT_DIR, 'token.json')
 DEFAULT_SHEET_ID = '1DuA11GWgOuKwLC0Pk09CA5nfx5Ijc77WI70qgk1-ico'
-PROXY_HOST = '127.0.0.1'
-PROXY_PORT = 7897
+# Local proxy for Google Sheets - disabled on Railway
+PROXY_HOST = os.environ.get('GOOGLE_PROXY_HOST', '127.0.0.1') if os.environ.get('GOOGLE_PROXY_HOST') else None
+PROXY_PORT = int(os.environ.get('GOOGLE_PROXY_PORT', '7897')) if os.environ.get('GOOGLE_PROXY_HOST') else None
 DATA_DIR = os.path.join(PROJECT_DIR, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 PAID_FILE = os.path.join(DATA_DIR, 'paid.json')
@@ -650,8 +658,8 @@ def generate_excel(r):
 
 
 def write_to_google_sheets(sheet_id, r):
-    if socks is None or httplib2 is None:
-        raise Exception('Google Sheets support not installed (missing PySocks/httplib2)')
+    if not GOOGLE_SHEETS_OK:
+        raise Exception('Google Sheets support not installed. Install: pip install google-api-python-client google-auth-httplib2 PySocks')
     creds = Credentials.from_authorized_user_file(DEFAULT_TOKEN, ['https://www.googleapis.com/auth/spreadsheets'])
     proxy_info = httplib2.ProxyInfo(proxy_type=socks.PROXY_TYPE_HTTP, proxy_host=PROXY_HOST, proxy_port=PROXY_PORT)
     authorized_http = AuthorizedHttp(creds, http=httplib2.Http(proxy_info=proxy_info, timeout=60))
