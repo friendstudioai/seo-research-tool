@@ -644,84 +644,69 @@ def pricing():
     return render_template('pricing.html')
 
 
-@app.route('/enter-key')
+@app.route('/enter-key', methods=['GET', 'POST'])
 def enter_key():
-    return """<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Enter License Key</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#f5f7fa; display:flex; justify-content:center; align-items:center; min-height:100vh; }
-.card { background:#fff; border-radius:16px; padding:40px; box-shadow:0 2px 16px rgba(0,0,0,.08); max-width:440px; width:100%; text-align:center; }
-.card h2 { font-size:22px; color:#1a1a2e; margin-bottom:8px; }
-.card p { font-size:14px; color:#666; margin-bottom:24px; }
-.card input { width:100%; padding:12px 16px; border:2px solid #ddd; border-radius:10px; font-size:16px; text-align:center; letter-spacing:2px; font-family:monospace; margin-bottom:16px; }
-.card input:focus { outline:none; border-color:#2F5496; }
-.card button { background:#2F5496; color:#fff; border:none; padding:12px 24px; border-radius:10px; font-size:16px; font-weight:600; cursor:pointer; width:100%; }
-.card button:hover { background:#1e3c6e; }
-#msg { margin-top:16px; font-size:14px; display:none; padding:12px; border-radius:8px; }
-#msg.ok { display:block; background:#e8f5e9; color:#2d7d46; }
-#msg.err { display:block; background:#fce4e4; color:#d32f2f; }
-</style></head>
-<body>
-<div class="card">
-<h2>Enter License Key</h2>
-<p>Enter the license key you received after purchase</p>
-<input type="text" id="key" placeholder="SEO-XXXXXXXX" maxlength="17" autocomplete="off">
-<button onclick="activate()">Activate</button>
-<div id="msg"></div>
-<p style="margin-top:16px;font-size:13px;"><a href="/pricing">Buy a license</a></p>
-</div>
-<script>
-function activate() {
-    var key = document.getElementById(\"key\").value.trim();
-    var msg = document.getElementById(\"msg\");
-    if (!key) { msg.className='err'; msg.textContent='Please enter a license key.'; return; }
-    fetch('/activate-key', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key:key}) })
-    .then(r=>r.json()).then(d=>{
-        if (d.ok) { msg.className='ok'; msg.innerHTML='License activated! Redirecting...'; setTimeout(()=>{ window.location.href='/'; }, 1500); }
-        else { msg.className='err'; msg.textContent=d.error || 'Invalid key.'; }
-    }).catch(function(){ msg.className='err'; msg.textContent='Connection error.'; });
-}
-</script>
-</body>
-</html>"""
-
-
-@app.route('/activate-key', methods=['POST'])
-def activate_key():
-    data = request.get_json(force=True)
-    key = (data.get('key', '') or '').strip().upper()
-    licenses = load_json(LICS_FILE)
-    if key not in licenses:
-        if key in BUILTIN_KEYS:
-            kdata = BUILTIN_KEYS[key]
-            if kdata.get('used'):
-                return jsonify({'ok': False, 'error': 'This key has already been used.'}), 400
-            kdata['used'] = True
+    msg = None
+    msg_type = None
+    key = None
+    if request.method == 'POST':
+        key = (request.form.get('key', '') or '').strip().upper()
+        if not key:
+            msg = 'Please enter a license key.'
+            msg_type = 'err'
         else:
-            return jsonify({'ok': False, 'error': 'Invalid license key.'}), 400
-    kdata = licenses[key]
-    if is_key_expired(kdata):
-        return jsonify({'ok': False, 'error': 'This key has expired.'}), 400
-    if kdata.get('used') and kdata.get('duration_hours', 0) == 0:
-        return jsonify({'ok': False, 'error': 'This key has already been used.'}), 400
-    now = time.time()
-    dur_h = kdata.get('duration_hours', 0)
-    kdata['used'] = True
-    kdata['used_at'] = now
-    save_json(LICS_FILE, licenses)
-    paid = load_json(PAID_FILE)
-    paid[key] = {'status': 'active', 'plan': kdata.get('plan', 'single'),
-                 'activated_at': now, 'duration_hours': dur_h}
-    save_json(PAID_FILE, paid)
-    resp = jsonify({'ok': True})
-    cookie_max = 3600
-    if dur_h > 0:
-        remaining = dur_h * 3600  # seconds remaining
-        cookie_max = max(300, int(remaining))
-    resp.set_cookie('seo_access', 'granted', max_age=cookie_max)
-    return resp
+            licenses = load_json(LICS_FILE)
+            kdata = None
+            if key in licenses:
+                kdata = licenses[key]
+            elif key in BUILTIN_KEYS:
+                kdata = BUILTIN_KEYS[key]
+            if kdata is None:
+                msg = 'Invalid license key.'
+                msg_type = 'err'
+            elif is_key_expired(kdata) or (kdata.get('used') and kdata.get('duration_hours', 0) == 0):
+                msg = 'This key has already been used or expired.'
+                msg_type = 'err'
+            else:
+                kdata['used'] = True
+                kdata['used_at'] = time.time()
+                if key not in BUILTIN_KEYS:
+                    save_json(LICS_FILE, licenses)
+                paid = load_json(PAID_FILE)
+                dur_h = kdata.get('duration_hours', 0)
+                paid[key] = {'status': 'active', 'plan': kdata.get('plan', 'single'),
+                             'activated_at': time.time(), 'duration_hours': dur_h}
+                save_json(PAID_FILE, paid)
+                resp = make_response('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Activated</title><style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#f5f7fa;display:flex;justify-content:center;align-items:center;min-height:100vh;}.card{background:#fff;border-radius:16px;padding:40px;box-shadow:0 2px 16px rgba(0,0,0,.08);max-width:440px;width:100%;text-align:center;}h2{font-size:22px;color:#2d7d46;}p{font-size:14px;color:#666;margin-top:12px;}.btn{display:inline-block;margin-top:20px;background:#2F5496;color:#fff;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;}</style></head><body><div class="card"><h2>License Activated!</h2><p>Redirecting to the tool...</p><a class="btn" href="/">Go to Tool</a></div><script>setTimeout(function(){window.location.href="/";},2000);</script></body></html>')
+                cookie_max = 3600
+                if dur_h > 0:
+                    cookie_max = max(300, int(dur_h * 3600))
+                resp.set_cookie('seo_access', 'granted', max_age=cookie_max)
+                return resp
+    html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Enter License Key</title><style>'
+    html += '*{margin:0;padding:0;box-sizing:border-box;}'
+    html += 'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#f5f7fa;display:flex;justify-content:center;align-items:center;min-height:100vh;}'
+    html += '.card{background:#fff;border-radius:16px;padding:40px;box-shadow:0 2px 16px rgba(0,0,0,.08);max-width:440px;width:100%;text-align:center;}'
+    html += 'h2{font-size:22px;color:#1a1a2e;margin-bottom:8px;}'
+    html += 'p{font-size:14px;color:#666;margin-bottom:24px;}'
+    html += 'input{width:100%;padding:12px 16px;border:2px solid #ddd;border-radius:10px;font-size:16px;text-align:center;letter-spacing:2px;font-family:monospace;margin-bottom:16px;}'
+    html += 'input:focus{outline:none;border-color:#2F5496;}'
+    html += 'button{background:#2F5496;color:#fff;border:none;padding:12px 24px;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer;width:100%;}'
+    html += 'button:hover{background:#1e3c6e;}'
+    html += '.msg{margin-top:16px;padding:12px;border-radius:8px;font-size:14px;}'
+    html += '.ok{background:#e8f5e9;color:#2d7d46;}'
+    html += '.err{background:#fce4e4;color:#d32f2f;}'
+    html += 'a{color:#2F5496;font-size:13px;}'
+    html += '</style></head><body><div class="card">'
+    html += '<h2>Enter License Key</h2><p>Enter the license key you received after purchase</p>'
+    html += '<form method=POST action=/enter-key>'
+    html += '<input type=text name=key placeholder="SEO-XXXXXXXX" maxlength=17 autocomplete=off>'
+    html += '<button type=submit>Activate</button></form>'
+    if msg:
+        html += '<div class="msg ' + msg_type + '">' + msg + '</div>'
+    html += '<p style="margin-top:16px"><a href=/pricing>Buy a license</a></p>'
+    html += '</div></body></html>'
+    return html
 
 
 @app.route('/admin/gen-keys')
