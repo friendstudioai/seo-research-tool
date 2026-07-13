@@ -173,7 +173,7 @@ async function pollStatus(taskId) {
         const resp = await fetch('/status/' + taskId);
         const data = await resp.json();
         
-        if (data.status === 'error') { showError(data.message); return; }
+        if (data.status === 'error') { showStatsError(data); return; }
         
         for (const stage of stages) {
             if (stage.check(data.status)) {
@@ -197,12 +197,21 @@ function showResults(data) {
     runBtn.disabled = false;
     results.style.display = 'block';
     
-    stats.innerHTML = [
+    var sourceText = data.data_source || 'Live Firecrawl Data';
+    var statsInfo = '<div style="text-align:center;margin-bottom:16px;font-size:13px;color:#888;">Data Source: <strong>' + sourceText + '</strong>';
+    if (data.search_stats) {
+        var st = data.search_stats;
+        statsInfo += ' &middot; Search: ' + st.raw_count + ' raw &rarr; ' + st.filtered_count + ' filtered &rarr; ' + st.scrape_success + ' scraped';
+        if (st.scrape_fail > 0) statsInfo += ' (' + st.scrape_fail + ' failed)';
+    }
+    statsInfo += '</div>';
+    
+    stats.innerHTML = statsInfo + [
         { num: data.serp.length, label: 'SERP Pages' },
         { num: data.keywords.length, label: 'Keywords Extracted' },
         { num: data.intent_summary.length, label: 'Intent Types' },
         { num: data.clusters.length, label: 'Theme Clusters' },
-    ].map(s => '<div class="stat-card"><div class="num">' + s.num + '</div><div class="label">' + s.label + '</div></div>').join('');
+    ].map(function(s) { return '<div class="stat-card"><div class="num">' + s.num + '</div><div class="label">' + s.label + '</div></div>'; }).join('');
 
     // Intent Summary detail
     let intentHtml = '<div class="intent-summary"><h3 style="font-size:15px;font-weight:600;color:#2F5496;margin-bottom:12px;">Intent Summary</h3><div class="stat-grid">';
@@ -260,6 +269,35 @@ async function exportToSheets() {
 
 function showError(msg) {
     errorMsg.textContent = msg;
+    errorMsg.style.display = 'block';
+    progress.style.display = 'none';
+    runBtn.disabled = false;
+}
+
+function showStatsError(data) {
+    var info = data.message || 'An error occurred.';
+    if (data.search_stats) {
+        var st = data.search_stats;
+        if (st.raw_count > 0) {
+            info += '<br><br><strong>Search Statistics:</strong><br>';
+            info += 'Raw results: ' + st.raw_count + '<br>';
+            info += 'After dedup: ' + st.dedup_count + '<br>';
+            info += 'After filter: ' + st.filtered_count + '<br>';
+            info += 'Scraped: ' + st.scrape_success + '<br>';
+            if (st.scrape_fail > 0) info += 'Failed: ' + st.scrape_fail;
+            if (st.scrape_failures && st.scrape_failures.length > 0) {
+                info += '<br><br><strong>Failure reasons:</strong><br>';
+                st.scrape_failures.slice(0, 3).forEach(function(f) {
+                    info += '&bull; ' + f.url + ': ' + f.reason + '<br>';
+                });
+            }
+        } else {
+            info += '<br><br><strong>Search Statistics:</strong><br>';
+            info += 'Raw: ' + st.raw_count + ' | Filtered: ' + st.filtered_count;
+            if (st.errors) info += '<br>Errors: ' + st.errors.join('<br>');
+        }
+    }
+    errorMsg.innerHTML = info;
     errorMsg.style.display = 'block';
     progress.style.display = 'none';
     runBtn.disabled = false;

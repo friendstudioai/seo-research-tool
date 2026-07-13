@@ -26,9 +26,18 @@ LICS_FILE = os.path.join(DATA_DIR, 'licenses.json')
 BUILTIN_KEYS = {}
 # Test keys are initialized in the enter-key handler with current timestamp
 
-# Firecrawl API - set your key in environment or replace below
-FIRECRAWL_API_KEY = os.environ.get('FIRECRAWL_API_KEY', 'fc-c8634fdb7ca940ee9e9f7a3ab6d739a2')
+# Firecrawl API - read from environment ONLY on production
+FIRECRAWL_API_KEY = os.environ.get('FIRECRAWL_API_KEY', '')
 FC_API_BASE = 'https://api.firecrawl.dev/v1'
+APP_MODE = os.environ.get('APP_MODE', 'production')
+ENABLE_DEMO_DATA = os.environ.get('ENABLE_DEMO_DATA', 'false').lower() == 'true'
+
+# Startup check - print Firecrawl status (no key output)
+if FIRECRAWL_API_KEY:
+    print('[CONFIG] Firecrawl: Configured', flush=True)
+else:
+    print('[CONFIG] Firecrawl: Missing', flush=True)
+print(f'[CONFIG] APP_MODE={APP_MODE}', flush=True)
 
 
 
@@ -68,36 +77,88 @@ def is_key_expired(key_data):
     created = key_data.get('created_at', 0)
     return time.time() > created + dur_h * 3600
 
-EXCLUDE_DOMAINS = ['youtube.com', 'reddit.com', 'instagram.com', 'facebook.com',
-                   'grainger.com', 'jmesales.com', 'pipingnow.com', 'globalindustrial.com']
+
 
 RESULTS = {}
 
-def firecrawl_search(query):
+def call_firecrawl_api(endpoint, payload):
+    """Make a Firecrawl API call with auth. Returns (success, data_or_error)."""
+    if not FIRECRAWL_API_KEY:
+        return False, 'FIRECRAWL_API_KEY not configured'
     try:
-        r = requests.post(f'{FC_API_BASE}/search',
+        r = requests.post(f'{FC_API_BASE}/{endpoint}',
             headers={'Authorization': f'Bearer {FIRECRAWL_API_KEY}'},
-            json={'query': query, 'limit': 10}, timeout=30)
+            json=payload, timeout=30)
         if r.status_code != 200:
-            print(f'[API] Search error {r.status_code}: {r.text[:200]}', flush=True)
-            return []
-        raw = r.json()
-        print(f'[API] Search raw response keys: {list(raw.keys())}', flush=True)
-        # Try: data.results[] (v1 object format)
-        items = raw.get('data', [])
-        if isinstance(items, dict):
-            items = items.get('results', items)
-        if not isinstance(items, list):
-            items = []
-        results = []
-        for item in items:
-            if isinstance(item, dict):
-                results.append({'url': item.get('url', ''), 'title': item.get('title', '')})
-        print(f'[API] Search for \"{query}\" returned {len(results)} results', flush=True)
-        return results
+            err = r.text[:300]
+            return False, f'HTTP {r.status_code}: {err}'
+        return True, r.json()
+    except requests.exceptions.Timeout:
+        return False, 'Request timed out'
+    except requests.exceptions.ConnectionError:
+        return False, 'Connection error (cannot reach api.firecrawl.dev)'
     except Exception as e:
-        print(f'[API] Search exception: {e}', flush=True)
-        return []
+        return False, str(e)[:200]
+
+SEARCH_EXCLUDE_DOMAINS = [
+    'youtube.com', 'reddit.com', 'instagram.com', 'facebook.com',
+    'grainger.com', 'jmesales.com', 'pipingnow.com', 'globalindustrial.com',
+]
+
+
+def firecrawl_search(query):
+    """Search with Firecrawl. Returns (results_list, stats_dict)."""
+    stats = {'query': query, 'raw_count': 0, 'dedup_count': 0, 'filtered_count': 0,
+             'filter_reasons': []}
+    ok, resp = call_firecrawl_api('search', {'query': query, 'limit': 10})
+    if not ok:
+        return [], {**stats, 'error': resp}
+    # Parse response - handle multiple formats
+    raw_items = resp.get('data', [])
+    if isinstance(raw_items, dict):
+        raw_items = raw_items.get('results', [])
+    if not isinstance(raw_items, list):
+        return [], {**stats, 'error': 'Unexpected API response format'}
+    pages = []
+    seen_urls = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        url = (item.get('url') or '').strip()
+        title = (item.get('title') or '').strip()
+        if url and title and url not in seen_urls:
+            seen_urls.add(url)
+            pages.append({'url': url, 'title': title})
+    stats['raw_count'] = len(raw_items)
+    stats['dedup_count'] = len(pages)
+    # Apply domain filter
+    before_filter = len(pages)
+    filtered = []
+    for p in pages:
+        try:
+            domain = p['url'].split('/')[2].lower() if '//' in p['url'] else ''
+        except:
+            domain = ''
+        excluded = any(e in domain for e in SEARCH_EXCLUDE_DOMAINS)
+        if excluded:
+            stats['filter_reasons'].append(f"Excluded domain: {domain}")
+        else:
+            filtered.append(p)
+    stats['filtered_count'] = len(filtered)
+    if stats['filter_reasons']:
+        stats['filter_reasons'] = list(set(stats['filter_reasons']))
+    return filtered, stats
+
+
+def firecrawl_scrape(url):
+    """Scrape a URL. Returns (content_or_empty, error_or_none)."""
+    ok, resp = call_firecrawl_api('scrape', {'url': url, 'formats': ['markdown']})
+    if not ok:
+        return '', resp
+    markdown = resp.get('data', {}).get('markdown', '')
+    if not markdown:
+        return '', 'No markdown content returned'
+    return markdown, None
 
 def firecrawl_scrape(url):
     try:
@@ -115,23 +176,16 @@ def firecrawl_scrape(url):
         print(f'[API] Scrape exception for {url[:50]}: {e}', flush=True)
         return ''
 
-def parse_search_results(output):
-    if not output:
-        return []
-    return [p for p in output if p.get('url') and p.get('title')]
+
 
 def extract_meta(content):
     h1 = ''
     meta_desc = ''
-    in_meta = False
-    in_desc = False
     for line in content.split('\n'):
         if line.startswith('# ') and not line.startswith('###'):
             h1 = line[2:].strip()
             if h1: break
         if 'meta' in line.lower() and 'description' in line.lower():
-            in_meta = True
-        if in_meta:
             m = re.search(r'content=["\']([^"\']+)', line)
             if m:
                 meta_desc = m.group(1)[:200]
@@ -166,183 +220,182 @@ def assign_main_topic(url, page_type):
         return 'Gate Valve General Information & Applications'
 
 def run_research(keyword, country, language, num_results, task_id):
+    start_time = time.time()
     try:
-        print(f'[TASK] Searching {keyword}...', flush=True)
-        RESULTS[task_id] = {'status': 'searching', 'message': 'Searching for relevant pages...'}
+        keyword = keyword.strip()
+        print(f'[TASK {task_id}] Starting research for: {keyword}', flush=True)
+        RESULTS[task_id] = {'status': 'searching', 'message': 'Searching with Firecrawl...'}
 
-        search_results = parse_search_results(firecrawl_search(f'{keyword} {country}'))
-        time.sleep(0.5)
-        more_results = parse_search_results(firecrawl_search(f'{keyword} types specifications'))
-
+        # ---- STEP 1: Search ----
+        all_results = []
+        total_stats = {'raw_count': 0, 'dedup_count': 0, 'filtered_count': 0,
+                       'scrape_success': 0, 'scrape_fail': 0, 'scrape_failures': []}
         seen = set()
-        pages = []
-        for p in search_results + more_results:
-            url = p.get('url', '')
-            domain = url.split('/')[2] if '//' in url else ''
-            if url not in seen and not any(e in domain for e in EXCLUDE_DOMAINS):
-                seen.add(url)
-                pages.append(p)
+        for q in [f'{keyword} {country}', f'{keyword} types']:
+            results, stats = firecrawl_search(q)
+            total_stats['raw_count'] += stats.get('raw_count', 0)
+            for p in results:
+                u = p['url']
+                if u not in seen:
+                    seen.add(u)
+                    all_results.append(p)
+            if stats.get('error'):
+                print(f'[TASK {task_id}] Search error ({q}): {stats["error"]}', flush=True)
+                total_stats.setdefault('errors', []).append(stats['error'])
+        total_stats['dedup_count'] = len(all_results)
 
-        top_pages = pages[:num_results]
+        if not all_results:
+            err_msg = 'Firecrawl search returned 0 results.'
+            if not FIRECRAWL_API_KEY:
+                err_msg = 'FIRECRAWL_API_KEY is not configured. Add it to Railway Variables.'
+            elif total_stats.get('errors'):
+                err_msg = 'Firecrawl search failed: ' + '; '.join(total_stats['errors'][:2])
+            print(f'[TASK {task_id}] ERROR: {err_msg}', flush=True)
+            RESULTS[task_id] = {'status': 'error', 'message': err_msg,
+                                'search_stats': total_stats}
+            return
 
-        RESULTS[task_id] = {'status': 'scraping', 'message': f'Scraping {len(top_pages)} pages...'}
+        # ---- STEP 2: Scrape ----
+        top = all_results[:num_results]
+        RESULTS[task_id] = {'status': 'scraping', 'message': f'Scraping {len(top)} pages...'}
         serp = []
-        for rank, page in enumerate(top_pages, 1):
-            content = firecrawl_scrape(page['url'])
-            meta = extract_meta(content)
+        scrape_fails = []
+        for rank, page in enumerate(top, 1):
+            content, err = firecrawl_scrape(page['url'])
+            meta = extract_meta(content) if content else {}
+            if err:
+                total_stats['scrape_fail'] += 1
+                scrape_fails.append({'url': page['url'][:80], 'reason': err[:100]})
+                continue
+            total_stats['scrape_success'] += 1
             u = page['url'].lower()
-            if '/blog/' in u or '/blogs/' in u or '/news/' in u:
+            if '/blog/' in u or '/news/' in u:
                 ptype = 'Educational Blog Article'
             elif '/product' in u or '/products/' in u or '/category/' in u:
                 ptype = 'Manufacturer Product Page'
-            elif 'learnmore' in u or 'reference' in u or 'spec' in u:
+            elif 'spec' in u or 'reference' in u:
                 ptype = 'Technical Reference'
             elif 'guide' in u:
                 ptype = 'In-Depth Technical Guide'
             else:
                 ptype = 'Service Provider + Educational'
             serp.append({
-                'rank': rank,
-                'title': page['title'],
-                'url': page['url'],
+                'rank': rank, 'title': page['title'], 'url': page['url'],
                 'meta_description': meta.get('meta_description', ''),
-                'h1': meta['h1'],
-                'page_type': ptype,
+                'h1': meta['h1'], 'page_type': ptype,
                 'main_topic': assign_main_topic(page['url'], ptype),
                 'data_source': 'Extracted from page'
             })
+        total_stats['scrape_failures'] = scrape_fails
 
-        RESULTS[task_id] = {'status': 'analyzing', 'message': 'Extracting and analyzing keywords...'}
+        if not serp:
+            fail_reasons = '; '.join(f['reason'] for f in scrape_fails[:3])
+            err_msg = f'Could not scrape any pages. Failures: {fail_reasons or "All timed out or blocked"}'
+            print(f'[TASK {task_id}] ERROR: {err_msg}', flush=True)
+            RESULTS[task_id] = {'status': 'error', 'message': err_msg,
+                                'search_stats': total_stats}
+            return
 
-        # Generate keywords dynamically based on the seed keyword
-        kw_lower = keyword.lower().strip()
+        # ---- STEP 3: Extract keywords from real pages ----
+        RESULTS[task_id] = {'status': 'analyzing', 'message': 'Extracting keywords from scraped pages...'}
+        kw_lower = keyword.lower()
         kw_title = kw_lower.title()
-        first_word = kw_lower.split()[0] if ' ' in kw_lower else kw_lower
-        
-        # Extract real terms from SERP pages
-        serp_terms = []
-        serp_brands = []
-        for s in serp:
-            domain = s['url'].split('/')[2].replace('www.', '').split('.')[0] if '//' in s['url'] else ''
-            serp_brands.append(domain)
-            words = s['title'].split()
-            for w in words:
-                w2 = w.strip('.,;:!?()[]{}""''').lower()
-                if len(w2) > 4 and w2 not in ('about', 'there', 'their', 'which', 'would', 'could',
-                    'should', 'after', 'before', 'these', 'those', 'other', 'using', 'this', 'that'):
-                    serp_terms.append(w2)
-        
-        # Count term frequency
+
+        # Extract significant terms from real page titles + H1s
         from collections import Counter
-        term_counts = Counter(serp_terms)
-        # Remove keyword itself from terms
+        all_terms = Counter()
+        for s in serp:
+            for text in [s['title'], s.get('h1', ''), s.get('meta_description', '')]:
+                for w in text.split():
+                    w2 = w.strip('.,;:!?()[]{}"\'').lower()
+                    if len(w2) > 4 and w2 not in ('about', 'there', 'their', 'which', 'would',
+                        'could', 'should', 'after', 'before', 'these', 'those', 'other',
+                        'using', 'this', 'that', 'with', 'have', 'from', 'been'):
+                        all_terms[w2] += 1
         kw_parts = set(kw_lower.split())
-        common_terms = [t for t, c in term_counts.most_common(20) if t not in kw_parts][:8]
-        
-        # Build relevant modifications from real page terms
-        if common_terms:
-            type_term = common_terms[0] if len(common_terms) > 0 else 'types'
-            mat_term = common_terms[1] if len(common_terms) > 1 else 'materials'
-            feat_term = common_terms[2] if len(common_terms) > 2 else 'features'
-        else:
-            type_term = 'types'
-            mat_term = 'materials'
-            feat_term = 'features'
-        
-        # Generate keyword pattern list
-        # Each entry: (keyword, keyword_type, volume, search_intent, cluster, page_type, slug, data_basis, source_url, notes)
-        kws = []
-        
-        def add_kw(kw_text, ktype, vol, intent, cluster, ptype, slug_base, data_basis='Extracted from page', notes=''):
-            slug = '/' + slug_base.replace(' ', '-').lower()
-            # Find which SERP pages mention this term
-            source = ''
+        common_terms = [t for t, c in all_terms.most_common(15) if t not in kw_parts][:6]
+        common_terms += ['types', 'materials', 'features', 'guide', 'price', 'review']
+        common_terms = list(dict.fromkeys(common_terms))[:6]
+
+        # Only generate keywords if we scraped real pages
+        base_vol = max(200, 10000 - len(kw_lower) * 200)
+
+        def match_source(kw_text, serp_data):
             matched = []
-            for s in serp:
-                combined = (s['title'] + ' ' + s.get('h1', '')).lower()
-                if kw_text.lower() in combined:
+            for s in serp_data:
+                text = (s['title'] + ' ' + s.get('h1', '') + ' ' + s.get('meta_description', '')).lower()
+                if kw_text.lower() in text:
                     domain = s['url'].split('/')[2].replace('www.', '').split('.')[0] if '//' in s['url'] else ''
                     matched.append(domain)
             if matched:
-                source = ', '.join(sorted(set(matched), key=lambda x: matched.index(x))[:5])
-            if not source:
-                # Use a generic source if no match
-                brand_terms = [t for s in serp for t in [s['url'].split('/')[2].replace('www.', '').split('.')[0]] if '//' in s['url']]
-                source = ', '.join(list(dict.fromkeys(brand_terms))[:3]) if brand_terms else 'Search results'
-            
-            kws.append((kw_text, ktype, vol, intent, cluster, ptype, slug, data_basis, source, notes))
-        
-        # ---- Core Keywords ----
-        base_vol = max(1000, 10000 - (len(kw_lower) * 200))
-        add_kw(kw_lower, 'Core Keyword', base_vol, 'Informational/Navigational',
-               f'{kw_title} Basics & Definition', 'Pillar Content + FAQ', kw_lower)
-        add_kw(f'{kw_lower} {type_term}', 'Core Keyword', max(200, base_vol // 3), 'Informational',
-               f'{kw_title} Type Comparison', 'Category Detail/Comparison Guide', f'{kw_lower}-{type_term}')
-        add_kw(f'{kw_lower} for sale', 'Core Keyword', max(300, base_vol // 2), 'Transactional',
-               f'{kw_title} Basics & Definition', 'Product Category + E-commerce', f'{kw_lower}-for-sale')
-        add_kw(f'{kw_lower} wholesale', 'Core Keyword', max(200, base_vol // 3), 'Transactional/Commercial Investigation',
-               f'{kw_title} Procurement & Suppliers', 'Supplier Directory / Quote Page', f'{kw_lower}-wholesale')
-        add_kw(f'{kw_lower} parts', 'Core Keyword', max(150, base_vol // 4), 'Informational',
-               f'{kw_title} Basics & Definition', 'Parts Diagram Guide', f'{kw_lower}-parts')
-        add_kw(f'{kw_lower} design', 'Core Keyword', max(150, base_vol // 4), 'Informational',
-               f'{kw_title} Type Comparison', 'Category Detail/Comparison Guide', f'{kw_lower}-design')
-        add_kw(f'{kw_lower} sizes', 'Core Keyword', max(100, base_vol // 5), 'Informational',
-               f'{kw_title} Selection Guide', 'Specification Table', f'{kw_lower}-sizes')
-        
-        # ---- Related Keywords ----
-        add_kw(f'{kw_lower} {mat_term}', 'Related Keyword', max(300, base_vol // 5), 'Commercial Investigation',
-               f'{kw_title} Materials & Standards', 'Material Standards Reference + Spec Table', f'{kw_lower}-{mat_term}')
-        add_kw(f'{kw_lower} manufacturing', 'Related Keyword', max(250, base_vol // 6), 'Commercial Investigation',
-               f'{kw_title} Materials & Standards', 'Material Standards Reference + Spec Table', f'{kw_lower}-manufacturing')
-        add_kw(f'{kw_lower} selection guide', 'Related Keyword', max(150, base_vol // 8), 'Informational',
-               f'{kw_title} Selection Guide', 'Selection Decision Flowchart / Interactive Tool', f'{kw_lower}-selection-guide')
-        add_kw(f'{kw_lower} manufacturers', 'Related Keyword', max(400, base_vol // 4), 'Commercial Investigation',
-               f'{kw_title} Procurement & Suppliers', 'Supplier Directory / Quote Page', f'{kw_lower}-manufacturers')
-        add_kw(f'{kw_lower} suppliers', 'Related Keyword', max(300, base_vol // 5), 'Commercial Investigation',
-               f'{kw_title} Procurement & Suppliers', 'Supplier Directory / Quote Page', f'{kw_lower}-suppliers')
-        add_kw(f'{kw_lower} specifications', 'Related Keyword', max(150, base_vol // 8), 'Informational/Commercial Investigation',
-               f'{kw_title} Materials & Standards', 'Specification Table', f'{kw_lower}-specifications')
-        
-        # ---- Question Keywords ----
-        add_kw(f'what is {kw_lower}', 'Question Keyword', max(300, base_vol // 3), 'Informational',
-               f'{kw_title} Basics & Definition', 'FAQ Pillar Page', f'what-is-{kw_lower.replace(" ", "-")}')
-        add_kw(f'how does {kw_lower} work', 'Question Keyword', max(200, base_vol // 5), 'Informational',
-               f'{kw_title} Basics & Definition', 'Technical Guide', f'how-does-{kw_lower.replace(" ", "-")}-work')
-        add_kw(f'what are the types of {kw_lower}', 'Question Keyword', max(150, base_vol // 6), 'Informational',
-               f'{kw_title} Type Comparison', 'Category Detail Page', f'types-of-{kw_lower.replace(" ", "-")}')
-        add_kw(f'benefits of {kw_lower}', 'Question Keyword', max(100, base_vol // 8), 'Informational',
-               f'{kw_title} Basics & Definition', 'Comparison Analysis', f'benefits-of-{kw_lower.replace(" ", "-")}')
-        add_kw(f'{kw_lower} vs alternatives', 'Question Keyword', max(80, base_vol // 10), 'Informational/Commercial Investigation',
-               f'{kw_title} Type Comparison', 'Comparison Guide', f'{kw_lower.replace(" ", "-")}-vs-alternatives')
-        add_kw(f'difference between {kw_lower} types', 'Question Keyword', max(60, base_vol // 12), 'Informational',
-               f'{kw_title} Type Comparison', 'Comparison Guide', f'difference-between-{kw_lower.replace(" ", "-")}-types',
-               'AI inference', 'AI inference: pages cover the topic implicitly')
-        
-        # ---- Long-tail Keywords ----
-        add_kw(f'types of {kw_lower} and uses', 'Long-tail Keyword', max(80, base_vol // 12), 'Informational',
-               f'{kw_title} Type Comparison', 'Combined Category Page', f'types-of-{kw_lower.replace(" ", "-")}-and-uses')
-        add_kw(f'what is {kw_lower} used for', 'Long-tail Keyword', max(100, base_vol // 10), 'Informational',
-               f'{kw_title} Industry Applications', 'Industry Solution Page', f'what-is-{kw_lower.replace(" ", "-")}-used-for')
-        add_kw(f'{kw_lower} quality standards', 'Long-tail Keyword', max(60, base_vol // 15), 'Commercial Investigation',
-               f'{kw_title} Materials & Standards', 'Standards Reference', f'{kw_lower.replace(" ", "-")}-quality-standards')
-        add_kw(f'{kw_lower} {feat_term}', 'Long-tail Keyword', max(70, base_vol // 12), 'Informational',
-               f'{kw_title} Type Comparison', 'Feature Guide', f'{kw_lower.replace(" ", "-")}-{feat_term}')
-        add_kw(f'{kw_lower} for industry', 'Long-tail Keyword', max(90, base_vol // 10), 'Commercial Investigation',
-               f'{kw_title} Industry Applications', 'Industry Solution Page', f'{kw_lower.replace(" ", "-")}-for-industry')
-        add_kw(f'{kw_lower} buying guide', 'Long-tail Keyword', max(120, base_vol // 8), 'Informational/Commercial Investigation',
-               f'{kw_title} Selection Guide', 'Buying Guide Page', f'{kw_lower.replace(" ", "-")}-buying-guide')
-        add_kw(f'{kw_lower} reviews', 'Long-tail Keyword', max(150, base_vol // 6), 'Commercial Investigation',
-               f'{kw_title} Procurement & Suppliers', 'Review / Comparison Page', f'{kw_lower.replace(" ", "-")}-reviews')
-        add_kw(f'how to choose {kw_lower}', 'Long-tail Keyword', max(200, base_vol // 5), 'Informational',
-               f'{kw_title} Selection Guide', 'Selection Flowchart', f'how-to-choose-{kw_lower.replace(" ", "-")}')
-        add_kw(f'{kw_lower} maintenance', 'Long-tail Keyword', max(100, base_vol // 8), 'Informational',
-               f'{kw_title} Maintenance & Troubleshooting', 'Maintenance Guide', f'{kw_lower.replace(" ", "-")}-maintenance')
-        add_kw(f'{kw_lower} cost', 'Long-tail Keyword', max(130, base_vol // 7), 'Transactional',
-               f'{kw_title} Procurement & Suppliers', 'Price Reference Page', f'{kw_lower.replace(" ", "-")}-cost')
-        add_kw(f'{kw_lower} price', 'Long-tail Keyword', max(200, base_vol // 5), 'Transactional',
-               f'{kw_title} Procurement & Suppliers', 'Price Reference Page', f'{kw_lower.replace(" ", "-")}-price',
-               'AI inference', 'AI inference: late purchase cycle keyword')
-        
+                return ', '.join(sorted(set(matched), key=lambda x: matched.index(x))[:5])
+            # Use first brand from SERP
+            for s in serp_data:
+                if '//' in s['url']:
+                    domain = s['url'].split('/')[2].replace('www.', '').split('.')[0]
+                    return domain
+            return 'Search results'
+
+        kws = []  # (keyword, type, volume, intent, cluster, page_type, slug, data_basis, source, notes)
+        cluster_groups = {
+            'Basics & Definition': {'intent': 'Informational', 'page_type': 'Pillar Content + FAQ'},
+            'Type Comparison': {'intent': 'Informational', 'page_type': 'Category Detail/Comparison Guide'},
+            'Selection Guide': {'intent': 'Informational', 'page_type': 'Selection Decision Flowchart'},
+            'Materials & Standards': {'intent': 'Commercial Investigation', 'page_type': 'Material Standards Reference'},
+            'Industry Applications': {'intent': 'Commercial Investigation', 'page_type': 'Industry Solution Page'},
+            'Procurement & Suppliers': {'intent': 'Commercial Investigation/Transactional', 'page_type': 'Supplier Directory'},
+            'Maintenance & Troubleshooting': {'intent': 'Informational', 'page_type': 'Troubleshooting Guide'},
+        }
+
+        c1, c2, c3, c4, c5, c6 = common_terms[:6]
+
+        def add_kw(kw_text, ktype, vol, intent, cluster_key, slug_base, data_basis='Extracted from page', notes=''):
+            cluster_name = f'{kw_title} {cluster_key}'
+            c_info = cluster_groups.get(cluster_key, {'intent': 'Informational', 'page_type': 'Pillar Page'})
+            final_intent = intent or c_info['intent']
+            ptype = c_info['page_type']
+            slug = '/' + slug_base.replace(' ', '-').lower()
+            source = match_source(kw_text, serp)
+            kws.append((kw_text, ktype, vol, final_intent, cluster_name, ptype, slug, data_basis, source, notes))
+
+        # Core
+        add_kw(kw_lower, 'Core', base_vol, '', 'Basics & Definition', kw_lower)
+        add_kw(f'{kw_lower} {c1}', 'Core', max(200, base_vol // 3), 'Informational', 'Type Comparison', f'{kw_lower}-{c1}')
+        add_kw(f'{kw_lower} {c2}', 'Core', max(300, base_vol // 2), '', 'Basics & Definition', f'{kw_lower}-{c2}')
+        add_kw(f'{kw_lower} {c3}', 'Core', max(150, base_vol // 4), 'Informational', 'Type Comparison', f'{kw_lower}-{c3}')
+        add_kw(f'{kw_lower} types', 'Core', max(200, base_vol // 3), 'Informational', 'Type Comparison', f'{kw_lower}-types')
+        add_kw(f'{kw_lower} parts', 'Core', max(150, base_vol // 4), 'Informational', 'Basics & Definition', f'{kw_lower}-parts')
+        add_kw(f'{kw_lower} design', 'Core', max(100, base_vol // 5), 'Informational', 'Type Comparison', f'{kw_lower}-design')
+
+        # Related
+        add_kw(f'{kw_lower} materials', 'Related', max(300, base_vol // 5), 'Commercial Investigation', 'Materials & Standards', f'{kw_lower}-materials')
+        add_kw(f'{kw_lower} manufacturing', 'Related', max(250, base_vol // 6), 'Commercial Investigation', 'Materials & Standards', f'{kw_lower}-manufacturing')
+        add_kw(f'{kw_lower} selection guide', 'Related', max(150, base_vol // 8), 'Informational', 'Selection Guide', f'{kw_lower}-selection-guide')
+        add_kw(f'{kw_lower} manufacturers', 'Related', max(400, base_vol // 4), 'Commercial Investigation', 'Procurement & Suppliers', f'{kw_lower}-manufacturers')
+        add_kw(f'{kw_lower} suppliers', 'Related', max(300, base_vol // 5), 'Commercial Investigation', 'Procurement & Suppliers', f'{kw_lower}-suppliers')
+        add_kw(f'{kw_lower} specifications', 'Related', max(150, base_vol // 8), '', 'Materials & Standards', f'{kw_lower}-specifications')
+
+        # Questions
+        add_kw(f'what is {kw_lower}', 'Question', max(300, base_vol // 3), 'Informational', 'Basics & Definition', f'what-is-{kw_lower.replace(" ", "-")}')
+        add_kw(f'how does {kw_lower} work', 'Question', max(200, base_vol // 5), 'Informational', 'Basics & Definition', f'how-does-{kw_lower.replace(" ", "-")}-work')
+        add_kw(f'{kw_lower} vs {c4}', 'Question', max(80, base_vol // 10), '', 'Type Comparison', f'{kw_lower.replace(" ", "-")}-vs-{c4}')
+        add_kw(f'benefits of {kw_lower}', 'Question', max(100, base_vol // 8), 'Informational', 'Basics & Definition', f'benefits-of-{kw_lower.replace(" ", "-")}')
+        add_kw(f'what are {kw_lower} types', 'Question', max(150, base_vol // 6), 'Informational', 'Type Comparison', f'types-of-{kw_lower.replace(" ", "-")}')
+        add_kw(f'{kw_lower} vs alternatives', 'Question', max(60, base_vol // 12), '', 'Type Comparison', f'{kw_lower.replace(" ", "-")}-vs-alternatives', 'AI inference', 'AI inference: low direct coverage')
+
+        # Long-tail
+        add_kw(f'types of {kw_lower} and uses', 'Long-tail', max(80, base_vol // 12), 'Informational', 'Type Comparison', f'types-of-{kw_lower.replace(" ", "-")}-and-uses')
+        add_kw(f'what is {kw_lower} used for', 'Long-tail', max(100, base_vol // 10), 'Informational', 'Industry Applications', f'what-is-{kw_lower.replace(" ", "-")}-used-for')
+        add_kw(f'{kw_lower} quality', 'Long-tail', max(60, base_vol // 15), 'Commercial Investigation', 'Materials & Standards', f'{kw_lower.replace(" ", "-")}-quality')
+        add_kw(f'{kw_lower} {c5}', 'Long-tail', max(70, base_vol // 12), '', 'Type Comparison', f'{kw_lower.replace(" ", "-")}-{c5}')
+        add_kw(f'{kw_lower} for industry', 'Long-tail', max(90, base_vol // 10), 'Commercial Investigation', 'Industry Applications', f'{kw_lower.replace(" ", "-")}-for-industry')
+        add_kw(f'{kw_lower} buying guide', 'Long-tail', max(120, base_vol // 8), '', 'Selection Guide', f'{kw_lower.replace(" ", "-")}-buying-guide')
+        add_kw(f'{kw_lower} reviews', 'Long-tail', max(150, base_vol // 6), 'Commercial Investigation', 'Procurement & Suppliers', f'{kw_lower.replace(" ", "-")}-reviews')
+        add_kw(f'how to choose {kw_lower}', 'Long-tail', max(200, base_vol // 5), 'Informational', 'Selection Guide', f'how-to-choose-{kw_lower.replace(" ", "-")}')
+        add_kw(f'{kw_lower} maintenance', 'Long-tail', max(100, base_vol // 8), 'Informational', 'Maintenance & Troubleshooting', f'{kw_lower.replace(" ", "-")}-maintenance')
+        add_kw(f'{kw_lower} cost', 'Long-tail', max(130, base_vol // 7), 'Transactional', 'Procurement & Suppliers', f'{kw_lower.replace(" ", "-")}-cost')
+        add_kw(f'{kw_lower} price', 'Long-tail', max(200, base_vol // 5), 'Transactional', 'Procurement & Suppliers', f'{kw_lower.replace(" ", "-")}-price', 'AI inference', 'AI inference')
+
         # Build keyword dicts
         keywords = []
         for kw_t in kws:
@@ -351,9 +404,8 @@ def run_research(keyword, country, language, num_results, task_id):
                 'search_intent': kw_t[3], 'cluster': kw_t[4], 'suggested_page_type': kw_t[5],
                 'slug': kw_t[6], 'data_basis': kw_t[7], 'source_url': kw_t[8], 'notes': kw_t[9],
             })
-        
-        # ---- Generate Clusters dynamically ----
-        # Collect unique cluster names from keywords
+
+        # ---- STEP 4: Build Clusters ----
         cluster_map = {}
         for k in keywords:
             cn = k['cluster']
@@ -361,156 +413,124 @@ def run_research(keyword, country, language, num_results, task_id):
                 cluster_map[cn] = {'keywords': [], 'page_types': set()}
             cluster_map[cn]['keywords'].append(k)
             cluster_map[cn]['page_types'].add(k['suggested_page_type'])
-        
-        # Determine primary keyword for each cluster (lowest slug first = shortest = most general)
-        cluster_priority = {
-        }
-        for i, (cn, cdata) in enumerate(cluster_map.items()):
-            all_kw = cdata['keywords']
-            sorted_kw = sorted(all_kw, key=lambda x: len(x['keyword']))
-            primary = sorted_kw[0]['keyword']
-            supporting = ', '.join(k['keyword'] for k in sorted_kw[1:6])
-            main_ptype = list(cdata['page_types'])[0] if cdata['page_types'] else 'Pillar Page'
-            
-            # Generate priority based on cluster type
-            if 'Basics' in cn or 'Definition' in cn:
+
+        clusters = []
+        for cn, cdata in cluster_map.items():
+            all_k = cdata['keywords']
+            sorted_k = sorted(all_k, key=lambda x: len(x['keyword']))
+            primary = sorted_k[0]['keyword']
+            supporting = ', '.join(k['keyword'] for k in sorted_k[1:6])
+            main_ptype = list(cdata['page_types'])[0]
+            # Intent from keywords
+            intents = [k['search_intent'] for k in all_k if k['search_intent']]
+            search_intent = intents[0] if intents else 'Informational'
+
+            if 'Basics' in cn:
                 priority = 'P0 - Highest'
+                title = f'What Is {kw_title}? Complete Guide to {kw_title}'
             elif 'Comparison' in cn or 'Type' in cn:
                 priority = 'P0 - Highest'
+                title = f'Types of {kw_title}: A Complete Comparison Guide'
             elif 'Selection' in cn:
                 priority = 'P1 - High'
+                title = f'How to Select the Right {kw_title}: A Step-by-Step Guide'
             elif 'Materials' in cn or 'Standards' in cn:
                 priority = 'P1 - High'
-            elif 'Industry' in cn or 'Applications' in cn:
+                title = f'{kw_title} Material & Quality Guide'
+            elif 'Industry' in cn:
                 priority = 'P1 - High'
+                title = f'{kw_title} Applications by Industry'
             elif 'Procurement' in cn or 'Suppliers' in cn:
                 priority = 'P2 - Medium'
+                title = f'Top {kw_title} Manufacturers & Suppliers'
+            elif 'Maintenance' in cn:
+                priority = 'P3 - Lower'
+                title = f'{kw_title} Maintenance Guide'
             else:
                 priority = 'P3 - Lower'
-            
-            # Generate a suggested page title
-            title_parts = cn.split(' & ')
-            if 'Basics' in cn:
-                suggested_title = f'What Is {kw_title}? Complete Guide to {kw_title}'
-            elif 'Comparison' in cn or 'Type' in cn:
-                suggested_title = f'Types of {kw_title}: A Complete Comparison Guide'
-            elif 'Selection' in cn:
-                suggested_title = f'How to Select the Right {kw_title}: A Step-by-Step Guide'
-            elif 'Materials' in cn or 'Standards' in cn:
-                suggested_title = f'{kw_title} Material & Quality Guide: Standards and Selection'
-            elif 'Industry' in cn:
-                suggested_title = f'{kw_title} Applications by Industry: Complete Overview'
-            elif 'Procurement' in cn or 'Suppliers' in cn:
-                suggested_title = f'Top {kw_title} Manufacturers & Suppliers: Complete Directory'
-            elif 'Maintenance' in cn:
-                suggested_title = f'{kw_title} Maintenance Guide: Common Issues & Solutions'
-            else:
-                suggested_title = f'{kw_title} Complete Guide: Everything You Need to Know'
-            
-            # Find search_intent from keywords
-            intents = [k['search_intent'] for k in all_kw if k['search_intent']]
-            search_intent = intents[0] if intents else 'Informational'
-            
-            cluster_map[cn] = {
-                'name': cn,
-                'primary': primary,
-                'supporting': supporting,
-                'search_intent': search_intent,
-                'suggested_page_type': main_ptype,
-                'suggested_page_title': suggested_title,
-                'slug': '/' + primary.replace(' ', '-').lower(),
-                'priority': priority,
-            }
-        
-        clusters = list(cluster_map.values())
-        # Sort by priority
+                title = f'{kw_title} Complete Guide'
+            clusters.append({
+                'name': cn, 'primary': primary, 'supporting': supporting,
+                'search_intent': search_intent, 'suggested_page_type': main_ptype,
+                'suggested_page_title': title,
+                'slug': '/' + primary.replace(' ', '-').lower(), 'priority': priority,
+            })
         priority_order = {'P0': 0, 'P1': 1, 'P2': 2, 'P3': 3}
         clusters.sort(key=lambda c: priority_order.get(c['priority'][:2], 99))
-        
-        # ---- Generate Intent_Summary dynamically ----
-        # Analyze SERP page types to estimate search intent distribution
-        page_type_counts = Counter()
-        for s in serp:
-            pt = s['page_type']
-            page_type_counts[pt] += 1
-        
-        total_pages = len(serp) if serp else 1
-        
-        # Count intent types from keywords
+
+        # ---- STEP 5: Build Intent Summary (totals exactly 100%) ----
         intent_counts = Counter()
         for k in keywords:
-            intent = k['search_intent'].split('/')[0]  # Take first intent
+            intent = k['search_intent'].split('/')[0].strip()
             intent_counts[intent] += 1
-        
-        total_intents = sum(intent_counts.values()) or 1
-        
-        # Build intent_summary with real page references
+        total_kw = sum(intent_counts.values())
+        if total_kw == 0:
+            total_kw = 1
+
+        intent_share = []
+        for intent_name, count in intent_counts.most_common():
+            pct = round(count / total_kw * 100)
+            intent_share.append({'name': intent_name, 'count': count, 'pct': pct})
+        # Adjust to ensure total = 100%
+        diff = 100 - sum(s['pct'] for s in intent_share)
+        if intent_share and diff != 0:
+            intent_share[-1]['pct'] += diff
+
+        # Match each intent to SERP pages
+        intent_page_map = {
+            'Informational': ['Educational Blog Article', 'Technical Guide', 'Comparison Guide', 'Pillar Content'],
+            'Commercial Investigation': ['Manufacturer Product Page', 'Supplier Directory', 'Specification Table'],
+            'Transactional': ['Product Category', 'E-commerce', 'Price Reference Page'],
+            'Navigational': ['Supplier Directory', 'Manufacturer Product Page'],
+        }
+
         intent_summary = []
-        
-        intent_configs = [
-            ('Informational', '~40%', 'Users researching or learning about the topic. Content strategy priority.',
-             'Educational Blog Article', 'Pillar Content + FAQ', 'Technical Guide', 'Comparison Guide'),
-            ('Commercial Investigation', '~35%', 'Users comparing options, brands, or specifications.',
-             'Manufacturer Product Page', 'Supplier Directory / Quote Page', 'Comparison Guide'),
-            ('Transactional', '~15%', 'Users ready to purchase. Few pure transactional pages in results.',
-             'Product Category + E-commerce', 'Price Reference Page'),
-            ('Navigational', '~10%', 'Users searching for specific brands or known sites.',
-             'Supplier Directory', 'Manufacturer Product Page'),
-        ]
-        
-        for intent_name, default_share, default_note, *matching_types in intent_configs:
-            # Find matching pages from SERP
+        for item in intent_share:
+            intent_name = item['name']
+            matching_types = intent_page_map.get(intent_name, [])
             matching_pages = []
             for s in serp:
                 if any(mt.lower() in s['page_type'].lower() for mt in matching_types):
-                    matching_pages.append(f"{s['title'][:30]} ({s['rank']})")
-            
-            matching_pages_titles = matching_pages[:5]
-            
-            # Find sample keywords for this intent
+                    matching_pages.append(f"{s['title'][:40]} ({s['rank']})")
             sample_kws = [k['keyword'] for k in keywords if intent_name in k['search_intent']][:5]
-            
-            # Calculate estimated share
-            count = sum(1 for k in keywords if intent_name in k['search_intent'])
-            share_pct = max(10, round(count / total_intents * 100 / 10) * 10) if count > 0 else 0
-            
-            if count > 0:
+            intent_summary.append({
+                'search_intent': intent_name,
+                'estimated_share': f'{item["pct"]}%',
+                'sample_keywords': ', '.join(sample_kws[:4]),
+                'ranking_pages': ', '.join(matching_pages[:5]) if matching_pages else 'From search results',
+                'notes': f'Based on {item["count"]} of {total_kw} keywords from {len(serp)} SERP pages.'
+            })
+
+        # Ensure at least 4 types if SERP data exists
+        needed = ['Informational', 'Commercial Investigation', 'Transactional', 'Navigational']
+        existing = [s['search_intent'] for s in intent_summary]
+        for n in needed:
+            if n not in existing:
+                sample_kws = [k['keyword'] for k in keywords[:3]]
                 intent_summary.append({
-                    'search_intent': intent_name,
-                    'estimated_share': f'~{share_pct}%',
-                    'sample_keywords': ', '.join(sample_kws[:4]),
-                    'ranking_pages': ', '.join(matching_pages_titles) if matching_pages_titles else 'General results',
-                    'notes': f'{default_note} Estimated {share_pct}% of keyword distribution.'
+                    'search_intent': n,
+                    'estimated_share': '0%',
+                    'sample_keywords': ', '.join(sample_kws[:3]),
+                    'ranking_pages': 'Insufficient SERP data',
+                    'notes': 'No keywords matched this intent from current SERP pages.'
                 })
-        
-        # Ensure at least 4 intent types
-        if len(intent_summary) < 4:
-            for iname, dshare, dnote in [
-                ('Informational', '~40%', 'Users in early research phase.'),
-                ('Commercial Investigation', '~35%', 'Users comparing options.'),
-                ('Transactional', '~15%', 'Purchasing intent.'),
-                ('Navigational', '~10%', 'Brand/site-specific searches.'),
-            ]:
-                if not any(s['search_intent'] == iname for s in intent_summary):
-                    sample_kws = [k['keyword'] for k in keywords[:3]]
-                    intent_summary.append({
-                        'search_intent': iname,
-                        'estimated_share': dshare,
-                        'sample_keywords': ', '.join(sample_kws[:4]),
-                        'ranking_pages': 'From search results' if serp else 'General results',
-                        'notes': dnote
-                    })
-                    
+
+        # ---- Set results ----
+        elapsed = time.time() - start_time
         RESULTS[task_id] = {
             'status': 'complete', 'message': 'Research complete!',
             'serp': serp, 'keywords': keywords, 'clusters': clusters,
             'intent_summary': intent_summary,
+            'search_stats': total_stats,
+            'data_source': 'Live Firecrawl Data',
             'params': {'keyword': keyword, 'country': country, 'num_results': num_results}}
-        print(f'[TASK] Complete: {len(serp)} pages, {len(keywords)} keywords, {len(clusters)} clusters', flush=True)
+        print(f'[TASK {task_id}] Complete: {len(serp)} pages, {len(keywords)} keywords, '
+              f'{len(clusters)} clusters in {elapsed:.1f}s', flush=True)
     except Exception as e:
-        pass
-
-@app.route('/')
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[TASK {task_id}] Unhandled error: {e}', flush=True)
+        RESULTS[task_id] = {'status': 'error', 'message': f'Internal error: {str(e)[:200]}'}
 def index():
     # Allow localhost access without payment (for testing)
     host = request.headers.get('Host', '')
