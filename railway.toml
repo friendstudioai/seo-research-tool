@@ -1,6 +1,5 @@
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+builder = "NIXPACKS"
 
 [deploy]
 startCommand = "gunicorn -b 0.0.0.0:$PORT --access-logfile - --error-logfile - app:app"
