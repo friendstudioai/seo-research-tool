@@ -5,12 +5,14 @@ import os, sys, re, json, io, threading, time, secrets, requests
 from flask import Flask, render_template, request, jsonify, send_file, make_response, session, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from cryptography.fernet import Fernet
+from werkzeug.middleware.proxy_fix import ProxyFix
 from google_auth_oauthlib.flow import Flow
 import google.auth.transport.requests
-import pathlib, urllib.parse, datetime
+import pathlib, urllib.parse, datetime, os
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CREDENTIALS = os.path.join(PROJECT_DIR, 'credentials.json')
@@ -42,6 +44,9 @@ print(f'[CONFIG] APP_MODE={APP_MODE}', flush=True)
 # Version display
 GIT_COMMIT = os.environ.get('RAILWAY_GIT_COMMIT_SHA', '')[:7] or 'local'
 print(f'[CONFIG] Version: {GIT_COMMIT}', flush=True)
+if not os.environ.get('FLASK_SECRET_KEY'):
+    print('[WARN] FLASK_SECRET_KEY not set. OAuth sessions will be lost after restart.', flush=True)
+    print('[HINT] Set FLASK_SECRET_KEY in Railway Variables to a random string.', flush=True)
 
 # ---- Database ----
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
@@ -95,14 +100,19 @@ def _get_fernet():
         _FERNET = Fernet(_ENCRYPTION_KEY.encode())
     return _FERNET
 def encrypt_token(token):
+    if not token: return ''
     f = _get_fernet()
     if not f: return token
-    return f.encrypt(token.encode()).decode()
+    try:
+        return f.encrypt(token.encode()).decode()
+    except:
+        return token
 def decrypt_token(encrypted):
+    if not encrypted: return ''
     f = _get_fernet()
     if not f: return encrypted
     try: return f.decrypt(encrypted.encode()).decode()
-    except: return None
+    except: return encrypted
 
 # ---- OAuth Config ----
 OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')
@@ -1037,7 +1047,9 @@ def auth_google_callback():
                    headers={'Authorization': f'Bearer {creds.token}'})
         info = r.json() if r.ok else {}
     except Exception as e:
-        print(f'[OAUTH] {e}', flush=True)
+        et = type(e).__name__
+        print(f'[OAUTH] callback failed: {et}', flush=True)
+        print(f'[OAUTH] detail: {str(e)[:200]}', flush=True)
         return redirect('/?oauth_error=callback_failed')
     sub = info.get('sub', ''); email = info.get('email', '')
     name = info.get('name', email); pic = info.get('picture', '')
@@ -1055,8 +1067,13 @@ def auth_google_callback():
     o.token_expiry = creds.expiry
     o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
     db.session.commit()
+    session.permanent = True
     session['user_id'] = user.id
-    session['user_email'] = email; session['user_name'] = name; session['user_picture'] = pic
+    session['user_email'] = email
+    session['user_name'] = name
+    session['user_picture'] = pic
+    session.modified = True
+    print(f'[OAUTH] callback SUCCESS: user={email[:20]}... uid={user.id}', flush=True)
     return redirect('/')
 
 @app.route('/auth/google/disconnect', methods=['POST'])
