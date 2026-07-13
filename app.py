@@ -295,6 +295,7 @@ def run_research(keyword, country, language, num_results, task_id):
                                 'data_source': 'Live Firecrawl Data', 'version': GIT_COMMIT, 'search_stats': total_stats}
             return
         # ---- STEP 3: Extract keywords from real pages ----
+        print(f'[TASK {task_id}] STEP 3: extract keywords from {len(serp)} pages', flush=True)
         RESULTS[task_id] = {'status': 'analyzing', 'message': 'Extracting keywords from scraped pages...'}
         kw_lower = keyword.lower()
         kw_title = kw_lower.title()
@@ -455,6 +456,7 @@ def run_research(keyword, country, language, num_results, task_id):
             })
         priority_order = {'P0': 0, 'P1': 1, 'P2': 2, 'P3': 3}
         clusters.sort(key=lambda c: priority_order.get(c['priority'][:2], 99))
+        print(f'[TASK {task_id}] STEP 5: build intent summary from {len(keywords)} keywords', flush=True)
 
         # ---- STEP 5: Build Intent Summary (totals exactly 100%) ----
         intent_counts = Counter()
@@ -500,6 +502,7 @@ def run_research(keyword, country, language, num_results, task_id):
             })
 
         # Ensure at least 4 types if SERP data exists
+        print(f'[TASK {task_id}] STEP 6: finalize results', flush=True)
         needed = ['Informational', 'Commercial Investigation', 'Transactional', 'Navigational']
         existing = [s['search_intent'] for s in intent_summary]
         for n in needed:
@@ -528,8 +531,12 @@ def run_research(keyword, country, language, num_results, task_id):
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        print(f'[TASK {task_id}] Unhandled error: {e}', flush=True)
-        RESULTS[task_id] = {'status': 'error', 'message': f'Internal error: {str(e)[:200]}', 'data_source': 'Live Firecrawl Data', 'version': GIT_COMMIT}
+        last_frame = tb.strip().split('\n')[-2] if tb else ''
+        err_msg = f'Internal error: {str(e)[:150]}\n[TRACEBACK] {tb[-500:]}'
+        print(f'[TASK {task_id}] UNHANDLED ERROR:', flush=True)
+        print(tb, flush=True)
+        RESULTS[task_id] = {'status': 'error', 'message': err_msg,
+                           'data_source': 'Live Firecrawl Data', 'version': GIT_COMMIT}
 
 @app.route('/')
 def index():
