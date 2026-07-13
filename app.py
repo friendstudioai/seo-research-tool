@@ -8,7 +8,7 @@ from cryptography.fernet import Fernet
 from werkzeug.middleware.proxy_fix import ProxyFix
 from google_auth_oauthlib.flow import Flow
 import google.auth.transport.requests
-import pathlib, urllib.parse, datetime, os
+import pathlib, urllib.parse, datetime, os, warnings
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -1059,6 +1059,9 @@ def auth_google_start():
 
 @app.route('/auth/google/callback')
 def auth_google_callback():
+    with warnings.catch_warnings():
+        warnings.simplefilter('default')
+
     print('[OAUTH_STAGE] callback_enter', flush=True)
     state = request.args.get('state', '')
     saved_state = session.pop('google_oauth_state', None)
