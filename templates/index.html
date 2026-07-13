@@ -118,7 +118,7 @@
         </div>
     </div>
 
-    <div class="footer">Powered by Firecrawl · Google Sheets API</div>
+    <div class="footer">Powered by Firecrawl · Google Sheets API · Version: <span id="version-display">local</span></div>
 </div>
 
 <script>
@@ -198,10 +198,11 @@ function showResults(data) {
     results.style.display = 'block';
     
     var sourceText = data.data_source || 'Live Firecrawl Data';
-    var statsInfo = '<div style="text-align:center;margin-bottom:16px;font-size:13px;color:#888;">Data Source: <strong>' + sourceText + '</strong>';
+    var versionText = data.version || 'local';
+    var statsInfo = '<div style="text-align:center;margin-bottom:16px;font-size:13px;color:#888;">Data Source: <strong>' + sourceText + '</strong> | Version: <strong>' + versionText + '</strong>';
     if (data.search_stats) {
         var st = data.search_stats;
-        statsInfo += ' &middot; Search: ' + st.raw_count + ' raw &rarr; ' + st.filtered_count + ' filtered &rarr; ' + st.scrape_success + ' scraped';
+        statsInfo += '<br>Search: ' + st.raw_count + ' raw &rarr; ' + st.filtered_count + ' filtered &rarr; ' + st.scrape_success + ' scraped';
         if (st.scrape_fail > 0) statsInfo += ' (' + st.scrape_fail + ' failed)';
     }
     statsInfo += '</div>';
@@ -275,7 +276,8 @@ function showError(msg) {
 }
 
 function showStatsError(data) {
-    var info = data.message || 'An error occurred.';
+    var info = '<div style="font-size:11px;color:#999;margin-bottom:8px;">Data Source: ' + (data.data_source || 'Live Firecrawl Data') + ' | Version: ' + (data.version || 'local') + '</div>';
+    info += data.message || 'An error occurred.';
     if (data.search_stats) {
         var st = data.search_stats;
         if (st.raw_count > 0) {

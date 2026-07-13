@@ -38,6 +38,9 @@ if FIRECRAWL_API_KEY:
 else:
     print('[CONFIG] Firecrawl: Missing', flush=True)
 print(f'[CONFIG] APP_MODE={APP_MODE}', flush=True)
+# Version display
+GIT_COMMIT = os.environ.get('RAILWAY_GIT_COMMIT_SHA', '')[:7] or 'local'
+print(f'[CONFIG] Version: {GIT_COMMIT}', flush=True)
 
 
 
@@ -252,7 +255,7 @@ def run_research(keyword, country, language, num_results, task_id):
                 err_msg = 'Firecrawl search failed: ' + '; '.join(total_stats['errors'][:2])
             print(f'[TASK {task_id}] ERROR: {err_msg}', flush=True)
             RESULTS[task_id] = {'status': 'error', 'message': err_msg,
-                                'search_stats': total_stats}
+                                'data_source': 'Live Firecrawl Data', 'version': GIT_COMMIT, 'search_stats': total_stats}
             return
 
         # ---- STEP 2: Scrape ----
@@ -293,9 +296,8 @@ def run_research(keyword, country, language, num_results, task_id):
             err_msg = f'Could not scrape any pages. Failures: {fail_reasons or "All timed out or blocked"}'
             print(f'[TASK {task_id}] ERROR: {err_msg}', flush=True)
             RESULTS[task_id] = {'status': 'error', 'message': err_msg,
-                                'search_stats': total_stats}
+                                'data_source': 'Live Firecrawl Data', 'version': GIT_COMMIT, 'search_stats': total_stats}
             return
-
         # ---- STEP 3: Extract keywords from real pages ----
         RESULTS[task_id] = {'status': 'analyzing', 'message': 'Extracting keywords from scraped pages...'}
         kw_lower = keyword.lower()
@@ -523,6 +525,7 @@ def run_research(keyword, country, language, num_results, task_id):
             'intent_summary': intent_summary,
             'search_stats': total_stats,
             'data_source': 'Live Firecrawl Data',
+            'version': GIT_COMMIT,
             'params': {'keyword': keyword, 'country': country, 'num_results': num_results}}
         print(f'[TASK {task_id}] Complete: {len(serp)} pages, {len(keywords)} keywords, '
               f'{len(clusters)} clusters in {elapsed:.1f}s', flush=True)
@@ -530,7 +533,7 @@ def run_research(keyword, country, language, num_results, task_id):
         import traceback
         tb = traceback.format_exc()
         print(f'[TASK {task_id}] Unhandled error: {e}', flush=True)
-        RESULTS[task_id] = {'status': 'error', 'message': f'Internal error: {str(e)[:200]}'}
+        RESULTS[task_id] = {'status': 'error', 'message': f'Internal error: {str(e)[:200]}', 'data_source': 'Live Firecrawl Data', 'version': GIT_COMMIT}
 def index():
     # Allow localhost access without payment (for testing)
     host = request.headers.get('Host', '')
