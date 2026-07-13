@@ -77,13 +77,26 @@ def firecrawl_search(query):
     try:
         r = requests.post(f'{FC_API_BASE}/search',
             headers={'Authorization': f'Bearer {FIRECRAWL_API_KEY}'},
-            json={'query': query, 'count': 10}, timeout=30)
-        data = r.json()
+            json={'query': query, 'limit': 10}, timeout=30)
+        if r.status_code != 200:
+            print(f'[API] Search error {r.status_code}: {r.text[:200]}', flush=True)
+            return []
+        raw = r.json()
+        print(f'[API] Search raw response keys: {list(raw.keys())}', flush=True)
+        # Try: data.results[] (v1 object format)
+        items = raw.get('data', [])
+        if isinstance(items, dict):
+            items = items.get('results', items)
+        if not isinstance(items, list):
+            items = []
         results = []
-        for item in data.get('data', {}).get('results', []):
-            results.append({'url': item.get('url', ''), 'title': item.get('title', '')})
+        for item in items:
+            if isinstance(item, dict):
+                results.append({'url': item.get('url', ''), 'title': item.get('title', '')})
+        print(f'[API] Search for \"{query}\" returned {len(results)} results', flush=True)
         return results
-    except:
+    except Exception as e:
+        print(f'[API] Search exception: {e}', flush=True)
         return []
 
 def firecrawl_scrape(url):
@@ -91,9 +104,15 @@ def firecrawl_scrape(url):
         r = requests.post(f'{FC_API_BASE}/scrape',
             headers={'Authorization': f'Bearer {FIRECRAWL_API_KEY}'},
             json={'url': url, 'formats': ['markdown']}, timeout=30)
+        if r.status_code != 200:
+            print(f'[API] Scrape error {r.status_code} for {url[:50]}: {r.text[:200]}', flush=True)
+            return ''
         data = r.json()
-        return data.get('data', {}).get('markdown', '')
-    except:
+        markdown = data.get('data', {}).get('markdown', '')
+        print(f'[API] Scraped {url[:50]}... ({len(markdown)} chars)', flush=True)
+        return markdown
+    except Exception as e:
+        print(f'[API] Scrape exception for {url[:50]}: {e}', flush=True)
         return ''
 
 def parse_search_results(output):
