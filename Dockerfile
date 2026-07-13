@@ -7,6 +7,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 5555
+EXPOSE ${PORT:-5555}
 
-CMD ["gunicorn", "-b", "0.0.0.0:5555", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+CMD gunicorn -b 0.0.0.0:${PORT:-5555} --access-logfile - --error-logfile - app:app

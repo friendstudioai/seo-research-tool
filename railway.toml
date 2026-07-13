@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "gunicorn -b 0.0.0.0:$PORT --access-logfile - --error-logfile - app:app"
+healthcheckPath = "/health"
+restartPolicyType = "always"

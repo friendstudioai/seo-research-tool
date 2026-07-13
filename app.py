@@ -534,6 +534,8 @@ def run_research(keyword, country, language, num_results, task_id):
         tb = traceback.format_exc()
         print(f'[TASK {task_id}] Unhandled error: {e}', flush=True)
         RESULTS[task_id] = {'status': 'error', 'message': f'Internal error: {str(e)[:200]}', 'data_source': 'Live Firecrawl Data', 'version': GIT_COMMIT}
+
+@app.route('/')
 def index():
     # Allow localhost access without payment (for testing)
     host = request.headers.get('Host', '')
@@ -833,5 +835,12 @@ def admin_page():
 
 
 
+
+
+@app.route('/health')
+def health():
+    return 'OK', 200
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5555, host='0.0.0.0')
+    port = int(os.environ.get('PORT', 5555))
+    app.run(debug=False, port=port, host='0.0.0.0')
