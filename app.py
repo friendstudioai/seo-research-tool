@@ -2,7 +2,12 @@
 """SEO Keyword Research Web App - Firecrawl + Google Sheets + Excel export."""
 
 import os, sys, re, json, io, threading, time, secrets, requests
-from flask import Flask, render_template, request, jsonify, send_file, make_response
+from flask import Flask, render_template, request, jsonify, send_file, make_response, session, redirect, url_for
+from flask_sqlalchemy import SQLAlchemy
+from cryptography.fernet import Fernet
+from google_auth_oauthlib.flow import Flow
+import google.auth.transport.requests
+import pathlib, urllib.parse, datetime
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -37,6 +42,110 @@ print(f'[CONFIG] APP_MODE={APP_MODE}', flush=True)
 # Version display
 GIT_COMMIT = os.environ.get('RAILWAY_GIT_COMMIT_SHA', '')[:7] or 'local'
 print(f'[CONFIG] Version: {GIT_COMMIT}', flush=True)
+
+# ---- Database ----
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL or 'sqlite:///seo.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', app.secret_key)
+app.config['SESSION_COOKIE_SECURE'] = (os.environ.get('APP_MODE', 'production') != 'development')
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+db = SQLAlchemy(app)
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    google_sub = db.Column(db.String(255), unique=True, nullable=False)
+    email = db.Column(db.String(255), nullable=False)
+    display_name = db.Column(db.String(255))
+    picture_url = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class GoogleOAuthCredentials(db.Model):
+    __tablename__ = 'google_oauth_credentials'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
+    encrypted_refresh_token = db.Column(db.Text, nullable=False)
+    encrypted_access_token = db.Column(db.Text)
+    token_expiry = db.Column(db.DateTime)
+    granted_scopes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class SelectedSheet(db.Model):
+    __tablename__ = 'selected_google_sheets'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    spreadsheet_id = db.Column(db.String(255), nullable=False)
+    spreadsheet_name = db.Column(db.String(500))
+    spreadsheet_url = db.Column(db.String(1000))
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+# ---- Token Encryption ----
+_ENCRYPTION_KEY = os.environ.get('TOKEN_ENCRYPTION_KEY', '')
+_FERNET = None
+def _get_fernet():
+    global _FERNET
+    if _FERNET is None and _ENCRYPTION_KEY:
+        _FERNET = Fernet(_ENCRYPTION_KEY.encode())
+    return _FERNET
+def encrypt_token(token):
+    f = _get_fernet()
+    if not f: return token
+    return f.encrypt(token.encode()).decode()
+def decrypt_token(encrypted):
+    f = _get_fernet()
+    if not f: return encrypted
+    try: return f.decrypt(encrypted.encode()).decode()
+    except: return None
+
+# ---- OAuth Config ----
+OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')
+OAUTH_CLIENT_SECRET = os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '')
+OAUTH_REDIRECT_URI = os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', '')
+PICKER_API_KEY = os.environ.get('GOOGLE_PICKER_API_KEY', '')
+CLOUD_PROJECT_NUMBER = os.environ.get('GOOGLE_CLOUD_PROJECT_NUMBER', '')
+GOOGLE_EXPORT_MODE = os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth')
+
+def get_flow(state=None):
+    flow = Flow.from_client_config(
+        {'web': {'client_id': OAUTH_CLIENT_ID, 'client_secret': OAUTH_CLIENT_SECRET,
+                  'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+                  'token_uri': 'https://oauth2.googleapis.com/token'}},
+        scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file'],
+        state=state)
+    flow.redirect_uri = OAUTH_REDIRECT_URI
+    return flow
+
+def get_current_user():
+    uid = session.get('user_id')
+    if not uid: return None
+    return db.session.get(User, uid)
+
+def get_user_credentials(user):
+    if not user: return None
+    oauth = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
+    if not oauth: return None
+    import google.oauth2.credentials
+    token = decrypt_token(oauth.encrypted_access_token or '')
+    refresh = decrypt_token(oauth.encrypted_refresh_token)
+    if not refresh: return None
+    creds = google.oauth2.credentials.Credentials(
+        token=token, refresh_token=refresh,
+        token_uri='https://oauth2.googleapis.com/token',
+        client_id=OAUTH_CLIENT_ID, client_secret=OAUTH_CLIENT_SECRET,
+        scopes=oauth.granted_scopes.split(',') if oauth.granted_scopes else None)
+    if not creds.valid and creds.expired and creds.refresh_token:
+        creds.refresh(google.auth.transport.requests.Request())
+        oauth.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
+        oauth.token_expiry = creds.expiry
+        db.session.commit()
+    return creds
 
 
 
@@ -577,6 +686,24 @@ def download(task_id):
 @app.route('/export-sheets/<task_id>', methods=['POST'])
 def export_sheets(task_id):
     r = RESULTS.get(task_id)
+    if not r or r.get('status') != 'complete': return jsonify({'error': 'Not complete'}), 400
+    try:
+        user = get_current_user()
+        svc = get_sheets_service_for_user(user)
+        if not svc: return jsonify({'error': 'Google Sheets unavailable. Set GOOGLE_SERVICE_ACCOUNT_JSON or connect Google.'}), 400
+        sid = ''
+        if user:
+            sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+            if sheet: sid = sheet.spreadsheet_id
+        if not sid:
+            sid = (request.json or {}).get('sheet_id', '').strip() if request.is_json else ''
+        if not sid: sid = os.environ.get('GOOGLE_SHEET_ID', '')
+        if not sid: return jsonify({'error': 'No sheet selected. Choose a sheet or set GOOGLE_SHEET_ID.'}), 400
+        write_to_google_sheets(svc, sid, r)
+        return jsonify({'url': f'https://docs.google.com/spreadsheets/d/{sid}/edit', 'sheet_id': sid})
+    except Exception as e: return jsonify({'error': str(e)[:300]}), 500
+def export_sheets(task_id):
+    r = RESULTS.get(task_id)
     if not r or r.get('status') != 'complete':
         return jsonify({'error': 'Research not complete. Complete a research first.'}), 400
     try:
@@ -673,7 +800,7 @@ def get_google_service():
 GOOGLE_SHEET_ID_ENV = os.environ.get('GOOGLE_SHEET_ID', '')
 
 
-def write_to_google_sheets(sheet_id, r):
+def write_to_google_sheets(svc, sheet_id, r):
     try:
         from googleapiclient.discovery import build
     except ImportError:
@@ -876,6 +1003,140 @@ def admin_page():
 def health():
     return 'OK', 200
 
+
+# --- Google OAuth Routes ---
+@app.route('/auth/google/start')
+def auth_google_start():
+    state = secrets.token_urlsafe(32)
+    session['oauth_state'] = state
+    flow = get_flow(state=state)
+    u, _ = flow.authorization_url(access_type='offline', include_granted_scopes='true', prompt='consent')
+    return redirect(u)
+
+@app.route('/auth/google/callback')
+def auth_google_callback():
+    state = request.args.get('state', '')
+    if not state or state != session.pop('oauth_state', None):
+        return redirect('/?oauth_error=state_mismatch')
+    if not request.args.get('code'): return redirect('/?oauth_error=no_code')
+    if request.args.get('error'): return redirect('/?oauth_error=cancelled')
+    try:
+        flow = get_flow(state=state); flow.fetch_token(code=request.args['code']); creds = flow.credentials
+        import requests as rq
+        r = rq.get('https://www.googleapis.com/oauth2/v3/userinfo', headers={'Authorization': f'Bearer {creds.token}'})
+        info = r.json() if r.ok else {}
+    except Exception as e:
+        print(f'[OAUTH] {e}', flush=True); return redirect('/?oauth_error=callback_failed')
+    sub, email, name, pic = info.get('sub',''), info.get('email',''), info.get('name', info.get('email','')), info.get('picture','')
+    user = db.session.query(User).filter_by(google_sub=sub).first()
+    if not user:
+        user = User(google_sub=sub, email=email, display_name=name, picture_url=pic)
+        db.session.add(user); db.session.flush()
+    else:
+        user.email, user.display_name, user.picture_url = email, name, pic
+    o = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
+    if not o: o = GoogleOAuthCredentials(user_id=user.id); db.session.add(o)
+    o.encrypted_refresh_token = encrypt_token(creds.refresh_token) if creds.refresh_token else ''
+    o.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
+    o.token_expiry = creds.expiry; o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
+    db.session.commit()
+    session['user_id'] = user.id; session['user_email'] = email; session['user_name'] = name; session['user_picture'] = pic
+    return redirect('/')
+
+@app.route('/auth/google/disconnect', methods=['POST'])
+def auth_google_disconnect():
+    user = get_current_user()
+    if user:
+        c = get_user_credentials(user)
+        if c and c.token:
+            try: __import__('requests').post('https://oauth2.googleapis.com/revoke', params={'token': c.token}, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+            except: pass
+        db.session.query(SelectedSheet).filter_by(user_id=user.id).delete()
+        db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).delete()
+        db.session.delete(user); db.session.commit()
+    session.clear(); return jsonify({'ok': True})
+
+@app.route('/api/google/status')
+def api_google_status():
+    user = get_current_user()
+    if not user: return jsonify({'connected': False, 'sheet': None})
+    sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+    return jsonify({'connected': True, 'email': user.email, 'name': user.display_name, 'picture': user.picture_url,
+        'sheet': {'id': sheet.spreadsheet_id, 'name': sheet.spreadsheet_name, 'url': sheet.spreadsheet_url} if sheet else None})
+
+@app.route('/api/google/picker-token')
+def api_google_picker_token():
+    user = get_current_user()
+    if not user: return jsonify({'error': 'Not connected'}), 401
+    c = get_user_credentials(user)
+    if not c: return jsonify({'error': 'Reconnect'}), 401
+    if c.expired: c.refresh(google.auth.transport.requests.Request())
+    return jsonify({'accessToken': c.token, 'pickerApiKey': PICKER_API_KEY, 'projectNumber': CLOUD_PROJECT_NUMBER, 'clientId': OAUTH_CLIENT_ID})
+
+@app.route('/api/google/select-sheet', methods=['POST'])
+def api_google_select_sheet():
+    user = get_current_user()
+    if not user: return jsonify({'error': 'Not connected'}), 401
+    sid = (request.get_json(force=True).get('spreadsheetId') or '').strip()
+    if not sid: return jsonify({'error': 'No ID'}), 400
+    c = get_user_credentials(user)
+    if not c: return jsonify({'error': 'Reconnect'}), 401
+    try:
+        from googleapiclient.discovery import build
+        meta = build('sheets', 'v4', credentials=c).spreadsheets().get(spreadsheetId=sid).execute()
+        if 'spreadsheet' not in meta.get('mimeType',''): return jsonify({'error': 'Not a spreadsheet'}), 400
+        name, url = meta['properties']['title'], meta['spreadsheetUrl']
+    except Exception as e:
+        e = str(e)[:200]
+        if '403' in e: return jsonify({'error':'Permission denied'}), 403
+        if '404' in e: return jsonify({'error':'Not found'}), 404
+        return jsonify({'error':e}), 400
+    sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+    if not sheet: sheet = SelectedSheet(user_id=user.id); db.session.add(sheet)
+    sheet.spreadsheet_id, sheet.spreadsheet_name, sheet.spreadsheet_url = sid, name, url
+    db.session.commit()
+    return jsonify({'ok':True, 'spreadsheetId':sid, 'spreadsheetName':name, 'spreadsheetUrl':url})
+
+@app.route('/api/google/create-sheet', methods=['POST'])
+def api_google_create_sheet():
+    user = get_current_user()
+    if not user: return jsonify({'error':'Not connected'}), 401
+    c = get_user_credentials(user)
+    if not c: return jsonify({'error':'Reconnect'}), 401
+    kw = (request.json or {}).get('keyword', 'research')
+    title = f'SEO Keyword Research - {kw} - {datetime.date.today().isoformat()}'
+    try:
+        from googleapiclient.discovery import build
+        s = build('sheets','v4',credentials=c).spreadsheets().create(body={'properties':{'title':title}}).execute()
+        sid, name, url = s['spreadsheetId'], s['properties']['title'], s['spreadsheetUrl']
+    except Exception as e: return jsonify({'error':f'Create failed: {str(e)[:200]}'}), 500
+    sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+    if not sheet: sheet = SelectedSheet(user_id=user.id); db.session.add(sheet)
+    sheet.spreadsheet_id, sheet.spreadsheet_name, sheet.spreadsheet_url = sid, name, url
+    db.session.commit()
+    return jsonify({'ok':True, 'spreadsheetId':sid, 'spreadsheetName':name, 'spreadsheetUrl':url})
+
+# --- Updated sheets helper ---
+def get_sheets_service_for_user(user):
+    mode = os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth')
+    if mode == 'user_oauth' and user:
+        c = get_user_credentials(user)
+        if c:
+            from googleapiclient.discovery import build
+            return build('sheets', 'v4', credentials=c, cache_discovery=False)
+    sa = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+    if sa:
+        import json
+        from google.oauth2.service_account import Credentials as SAC
+        from googleapiclient.discovery import build
+        return build('sheets', 'v4', credentials=SAC.from_service_account_info(json.loads(sa), scopes=['https://www.googleapis.com/auth/spreadsheets']), cache_discovery=False)
+    return None
+
+
+
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    print('[CONFIG] Database tables created', flush=True)
     port = int(os.environ.get('PORT', 5555))
     app.run(debug=False, port=port, host='0.0.0.0')
