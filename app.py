@@ -41,6 +41,16 @@ if FIRECRAWL_API_KEY:
 else:
     print('[CONFIG] Firecrawl: Missing', flush=True)
 print(f'[CONFIG] APP_MODE={APP_MODE}', flush=True)
+_TK_VAL = os.environ.get('TOKEN_ENCRYPTION_KEY', '')
+if _TK_VAL:
+    try:
+        from cryptography.fernet import Fernet as _FK
+        _FK(_TK_VAL.encode())
+        print('[CONFIG] TOKEN_ENCRYPTION_KEY: valid', flush=True)
+    except Exception:
+        print('[CONFIG] TOKEN_ENCRYPTION_KEY: INVALID (tokens will not be encrypted)', flush=True)
+else:
+    print('[CONFIG] TOKEN_ENCRYPTION_KEY: not set (tokens will not be encrypted)', flush=True)
 # Version display
 GIT_COMMIT = os.environ.get('RAILWAY_GIT_COMMIT_SHA', '')[:7] or 'local'
 print(f'[CONFIG] Version: {GIT_COMMIT}', flush=True)
@@ -116,7 +126,10 @@ _FERNET = None
 def _get_fernet():
     global _FERNET
     if _FERNET is None and _ENCRYPTION_KEY:
-        _FERNET = Fernet(_ENCRYPTION_KEY.encode())
+        try:
+            _FERNET = Fernet(_ENCRYPTION_KEY.encode())
+        except Exception:
+            _FERNET = None
     return _FERNET
 def encrypt_token(token):
     if not token: return ''
@@ -1075,7 +1088,7 @@ def auth_google_callback():
         et = type(e).__name__
         em = str(e)[:150]
         print(f'[OAUTH_ERROR] fetch_token stage={et} msg={em}', flush=True)
-        return redirect('/?oauth_error=callback_failed')
+        return redirect(f'/?oauth_error=callback_failed&etype={et}')
     try:
         sub, email, name, pic = info['sub'], info.get('email',''), info.get('name', info.get('email','')), info.get('picture','')
         user = db.session.query(User).filter_by(google_sub=sub).first()
@@ -1099,7 +1112,7 @@ def auth_google_callback():
         et = type(e).__name__
         em = str(e)[:150]
         print(f'[OAUTH_ERROR] save stage={et} msg={em}', flush=True)
-        return redirect('/?oauth_error=callback_failed')
+        return redirect(f'/?oauth_error=callback_failed&etype={et}')
     try:
         session.permanent = True
         session['user_id'] = user.id
@@ -1111,7 +1124,7 @@ def auth_google_callback():
     except Exception as e:
         et = type(e).__name__
         print(f'[OAUTH_ERROR] session stage={et}', flush=True)
-        return redirect('/?oauth_error=callback_failed')
+        return redirect(f'/?oauth_error=callback_failed&etype={et}')
     print('[OAUTH_STAGE] redirect_home', flush=True)
     return redirect('/')
 
