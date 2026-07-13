@@ -758,7 +758,42 @@ def admin_page():
                 keys.append(key)
             save_json(LICS_FILE, licenses)
             keys_result = {'keys': keys, 'expires': time.strftime('%Y-%m-%d %H:%M', time.gmtime(now + dur_h * 3600)) if dur_h > 0 else 'single-use'}
-    return render_template('admin.html', keys_result=keys_result, error_msg=error_msg)
+    html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Admin</title><style>'
+    html += '*{margin:0;padding:0;box-sizing:border-box;}'
+    html += 'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#f5f7fa;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:20px;}'
+    html += '.card{background:#fff;border-radius:16px;padding:32px;box-shadow:0 2px 16px rgba(0,0,0,.08);max-width:520px;width:100%;}'
+    html += 'h2{font-size:22px;color:#1a1a2e;margin-bottom:4px;}'
+    html += 'p{font-size:14px;color:#666;margin-bottom:20px;}'
+    html += 'label{display:block;font-size:13px;font-weight:600;color:#333;margin-bottom:4px;}'
+    html += 'select,input[type=password]{width:100%;padding:10px;border:2px solid #ddd;border-radius:8px;font-size:14px;margin-bottom:16px;}'
+    html += 'select:focus,input:focus{outline:none;border-color:#2F5496;}'
+    html += 'button{background:#2F5496;color:#fff;border:none;padding:12px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;width:100%;}'
+    html += 'button:hover{background:#1e3c6e;}'
+    html += '.result{margin-top:16px;padding:16px;border-radius:8px;font-size:14px;}'
+    html += '.ok{background:#e8f5e9;color:#2d7d46;}'
+    html += '.err{background:#fce4e4;color:#d32f2f;}'
+    html += '.key{background:#f0f4ff;padding:4px 8px;border-radius:4px;display:inline-block;margin:2px;font-family:monospace;font-size:13px;}'
+    html += 'a{display:block;text-align:center;margin-top:16px;font-size:13px;color:#666;}'
+    html += '</style></head><body><div class="card">'
+    html += '<h2>Generate License Key</h2><p>Create a new license key for a customer</p>'
+    html += '<form method=POST action=/admin>'
+    html += '<label>Plan</label><select name=plan>'
+    html += '<option value=single>Single (24h) - $4.99</option>'
+    html += '<option value=monthly selected>Monthly (30 days) - $19</option>'
+    html += '<option value=yearly>Yearly (365 days) - $149</option></select>'
+    html += '<label>Quantity</label><select name=count>'
+    html += '<option value=1>1</option><option value=5>5</option><option value=10>10</option></select>'
+    html += '<label>Admin Secret</label><input type=password name=secret placeholder="Enter admin secret" required>'
+    html += '<button type=submit>Generate Keys</button></form>'
+    if error_msg:
+        html += '<div class="result err">' + error_msg + '</div>'
+    if keys_result:
+        html += '<div class="result ok"><strong>Keys Generated:</strong><br><br>'
+        for k in keys_result["keys"]:
+            html += '<span class="key">' + k + '</span><br>'
+        html += '<br><small>Expires: ' + keys_result["expires"] + '</small></div>'
+    html += '<a href=/>Back to tool</a></div></body></html>'
+    return html
 
 
 
