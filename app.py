@@ -1027,6 +1027,7 @@ def auth_google_start():
 
 @app.route('/auth/google/callback')
 def auth_google_callback():
+    print('[OAUTH_STAGE] callback_enter', flush=True)
     state = request.args.get('state', '')
     saved_state = session.pop('google_oauth_state', None)
     code_verifier = session.pop('google_oauth_code_verifier', None)
@@ -1038,42 +1039,61 @@ def auth_google_callback():
         return redirect('/?oauth_error=no_code')
     if request.args.get('error'):
         return redirect('/?oauth_error=cancelled')
+    print('[OAUTH_STAGE] state_valid', flush=True)
     try:
         flow = get_flow(state=state, code_verifier=code_verifier)
         flow.fetch_token(authorization_response=request.url)
         creds = flow.credentials
+        print('[OAUTH_STAGE] fetch_token_ok', flush=True)
         import requests as rq
         r = rq.get('https://www.googleapis.com/oauth2/v3/userinfo',
-                   headers={'Authorization': f'Bearer {creds.token}'})
+                    headers={'Authorization': f'Bearer {creds.token}'})
         info = r.json() if r.ok else {}
+        if not info.get('sub'):
+            raise Exception('Failed to get user info from Google')
+        print('[OAUTH_STAGE] userinfo_ok sub=' + info.get('sub', '')[:10], flush=True)
     except Exception as e:
         et = type(e).__name__
-        print(f'[OAUTH] callback failed: {et}', flush=True)
-        print(f'[OAUTH] detail: {str(e)[:200]}', flush=True)
+        em = str(e)[:150]
+        print(f'[OAUTH_ERROR] fetch_token stage={et} msg={em}', flush=True)
         return redirect('/?oauth_error=callback_failed')
-    sub = info.get('sub', ''); email = info.get('email', '')
-    name = info.get('name', email); pic = info.get('picture', '')
-    user = db.session.query(User).filter_by(google_sub=sub).first()
-    if not user:
-        user = User(google_sub=sub, email=email, display_name=name, picture_url=pic)
-        db.session.add(user); db.session.flush()
-    else:
-        user.email, user.display_name, user.picture_url = email, name, pic
-    o = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
-    if not o:
-        o = GoogleOAuthCredentials(user_id=user.id); db.session.add(o)
-    o.encrypted_refresh_token = encrypt_token(creds.refresh_token) if creds.refresh_token else ''
-    o.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
-    o.token_expiry = creds.expiry
-    o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
-    db.session.commit()
-    session.permanent = True
-    session['user_id'] = user.id
-    session['user_email'] = email
-    session['user_name'] = name
-    session['user_picture'] = pic
-    session.modified = True
-    print(f'[OAUTH] callback SUCCESS: user={email[:20]}... uid={user.id}', flush=True)
+    try:
+        sub, email, name, pic = info['sub'], info.get('email',''), info.get('name', info.get('email','')), info.get('picture','')
+        user = db.session.query(User).filter_by(google_sub=sub).first()
+        if not user:
+            user = User(google_sub=sub, email=email, display_name=name, picture_url=pic)
+            db.session.add(user); db.session.flush()
+        else:
+            user.email, user.display_name, user.picture_url = email, name, pic
+        print('[OAUTH_STAGE] user_upsert_ok uid=' + str(user.id), flush=True)
+        o = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
+        if not o:
+            o = GoogleOAuthCredentials(user_id=user.id); db.session.add(o)
+        o.encrypted_refresh_token = encrypt_token(creds.refresh_token) if creds.refresh_token else ''
+        o.encrypted_access_token = encrypt_token(creds.token) if creds.token else ''
+        o.token_expiry = creds.expiry
+        o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
+        print('[OAUTH_STAGE] token_encrypt_ok', flush=True)
+        db.session.commit()
+        print('[OAUTH_STAGE] db_commit_ok', flush=True)
+    except Exception as e:
+        et = type(e).__name__
+        em = str(e)[:150]
+        print(f'[OAUTH_ERROR] save stage={et} msg={em}', flush=True)
+        return redirect('/?oauth_error=callback_failed')
+    try:
+        session.permanent = True
+        session['user_id'] = user.id
+        session['user_email'] = email
+        session['user_name'] = name
+        session['user_picture'] = pic
+        session.modified = True
+        print(f'[OAUTH_STAGE] session_user_set uid={user.id}', flush=True)
+    except Exception as e:
+        et = type(e).__name__
+        print(f'[OAUTH_ERROR] session stage={et}', flush=True)
+        return redirect('/?oauth_error=callback_failed')
+    print('[OAUTH_STAGE] redirect_home', flush=True)
     return redirect('/')
 
 @app.route('/auth/google/disconnect', methods=['POST'])
@@ -1167,9 +1187,14 @@ def get_sheets_service_for_user(user):
 
 
 
-if __name__ == '__main__':
-    with app.app_context():
+# Ensure database tables exist (also needed for gunicorn)
+with app.app_context():
+    try:
         db.create_all()
-    print('[CONFIG] Database tables created', flush=True)
+    except Exception as e:
+        print(f'[DB] create_all at module level: {e}', flush=True)
+
+if __name__ == '__main__':
+    print('[CONFIG] Database already initialized', flush=True)
     port = int(os.environ.get('PORT', 5555))
     app.run(debug=False, port=port, host='0.0.0.0')
