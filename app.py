@@ -159,23 +159,6 @@ def firecrawl_scrape(url):
         return '', 'No markdown content returned'
     return markdown, None
 
-def firecrawl_scrape(url):
-    try:
-        r = requests.post(f'{FC_API_BASE}/scrape',
-            headers={'Authorization': f'Bearer {FIRECRAWL_API_KEY}'},
-            json={'url': url, 'formats': ['markdown']}, timeout=30)
-        if r.status_code != 200:
-            print(f'[API] Scrape error {r.status_code} for {url[:50]}: {r.text[:200]}', flush=True)
-            return ''
-        data = r.json()
-        markdown = data.get('data', {}).get('markdown', '')
-        print(f'[API] Scraped {url[:50]}... ({len(markdown)} chars)', flush=True)
-        return markdown
-    except Exception as e:
-        print(f'[API] Scrape exception for {url[:50]}: {e}', flush=True)
-        return ''
-
-
 
 def extract_meta(content):
     h1 = ''
