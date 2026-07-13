@@ -2,13 +2,14 @@
 """SEO Keyword Research Web App - Firecrawl + Google Sheets + Excel export."""
 
 import os, sys, re, json, io, threading, time, secrets, requests
+os.environ.setdefault('OAUTHLIB_RELAX_TOKEN_SCOPE', '1')
 from flask import Flask, render_template, request, jsonify, send_file, make_response, session, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from cryptography.fernet import Fernet
 from werkzeug.middleware.proxy_fix import ProxyFix
 from google_auth_oauthlib.flow import Flow
 import google.auth.transport.requests
-import pathlib, urllib.parse, datetime, os, warnings
+import pathlib, urllib.parse, datetime, os
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -1059,8 +1060,6 @@ def auth_google_start():
 
 @app.route('/auth/google/callback')
 def auth_google_callback():
-    with warnings.catch_warnings():
-        warnings.simplefilter('default')
 
     print('[OAUTH_STAGE] callback_enter', flush=True)
     state = request.args.get('state', '')
@@ -1080,6 +1079,13 @@ def auth_google_callback():
         flow.fetch_token(authorization_response=request.url)
         creds = flow.credentials
         print('[OAUTH_STAGE] fetch_token_ok', flush=True)
+        # Validate required scope: drive.file
+        granted = set(creds.scopes or [])
+        drive_scope = 'https://www.googleapis.com/auth/drive.file'
+        if drive_scope not in granted and 'drive.file' not in granted:
+            print(f'[OAUTH_ERROR] stage=scope_validation type=MissingRequiredScope', flush=True)
+            raise Exception(f'Missing required scope: {drive_scope}')
+        print('[OAUTH_STAGE] scope_validation_ok', flush=True)
         import requests as rq
         r = rq.get('https://www.googleapis.com/oauth2/v3/userinfo',
                     headers={'Authorization': f'Bearer {creds.token}'})
