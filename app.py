@@ -735,5 +735,76 @@ def admin_gen_keys():
                     'expires': time.strftime('%Y-%m-%d %H:%M', time.gmtime(now + dur_h * 3600)) if dur_h > 0 else 'single-use'})
 
 
+
+@app.route('/admin')
+def admin_page():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Admin - Generate Keys</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#f5f7fa; display:flex; justify-content:center; align-items:center; min-height:100vh; }
+.card { background:#fff; border-radius:16px; padding:32px; box-shadow:0 2px 16px rgba(0,0,0,.08); max-width:500px; width:90%; }
+.card h2 { font-size:22px; color:#1a1a2e; margin-bottom:8px; }
+.card p { font-size:14px; color:#666; margin-bottom:20px; }
+label { display:block; font-size:13px; font-weight:600; color:#333; margin-bottom:4px; }
+select, input { width:100%; padding:10px; border:2px solid #ddd; border-radius:8px; font-size:14px; margin-bottom:16px; }
+select:focus, input:focus { outline:none; border-color:#2F5496; }
+button { background:#2F5496; color:#fff; border:none; padding:12px; border-radius:8px; font-size:16px; font-weight:600; cursor:pointer; width:100%; }
+button:hover { background:#1e3c6e; }
+#result { margin-top:16px; padding:12px; border-radius:8px; display:none; font-size:14px; word-break:break-all; }
+#result.ok { display:block; background:#e8f5e9; color:#2d7d46; }
+#result.err { display:block; background:#fce4e4; color:#d32f2f; }
+</style></head>
+<body>
+<div class="card">
+<h2>Generate License Key</h2>
+<p>Create a new license key for a customer</p>
+<form id="key-form">
+<label>Plan</label>
+<select id="plan" name="plan">
+<option value="single">Single Report (24h) - $4.99</option>
+<option value="monthly" selected>Monthly (30 days) - $19</option>
+<option value="yearly">Yearly (365 days) - $149</option>
+</select>
+<label>Quantity</label>
+<select id="count" name="count">
+<option value="1">1</option>
+<option value="5">5</option>
+<option value="10">10</option>
+</select>
+<label>Admin Secret</label>
+<input type="password" id="secret" name="secret" placeholder="Enter admin secret" required>
+<button type="submit">Generate Keys</button>
+</form>
+<div id="result"></div>
+</div>
+<script>
+document.getElementById("key-form").addEventListener("submit", async function(e) {
+  e.preventDefault();
+  var plan = document.getElementById("plan").value;
+  var count = document.getElementById("count").value;
+  var secret = document.getElementById("secret").value;
+  var result = document.getElementById("result");
+  result.className = "";
+  result.style.display = "none";
+  try {
+    var resp = await fetch("/admin/gen-keys?secret=" + encodeURIComponent(secret) + "&plan=" + plan + "&count=" + count);
+    if (!resp.ok) { result.className="err"; result.textContent="Unauthorized: wrong secret?"; result.style.display="block"; return; }
+    var data = await resp.json();
+    var html = "<strong>Keys Generated:</strong><br><br>";
+    data.keys.forEach(function(k) { html += "<code style=\"background:#f0f4ff;padding:4px 8px;border-radius:4px;display:inline-block;margin:2px;font-size:13px;\">" + k + "</code><br>"; });
+    html += "<br><small>Expires: " + data.expires + "</small>";
+    result.className = "ok";
+    result.innerHTML = html;
+    result.style.display = "block";
+  } catch(e) { result.className="err"; result.textContent="Error: " + e.message; result.style.display="block"; }
+});
+</script>
+</body>
+</html>"""
+
+
+
 if __name__ == '__main__':
     app.run(debug=True, port=5555, host='0.0.0.0')
