@@ -23,10 +23,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 PAID_FILE = os.path.join(DATA_DIR, 'paid.json')
 LICS_FILE = os.path.join(DATA_DIR, 'licenses.json')
 # Pre-generated test keys (always work, even if filesystem fails)
-BUILTIN_KEYS = {
-    'TEST-SEO-2024': {'plan': 'monthly', 'used': False, 'created_at': 0, 'duration_hours': 720},
-    'TEST-SINGLE-2024': {'plan': 'single', 'used': False, 'created_at': 0, 'duration_hours': 24},
-}
+BUILTIN_KEYS = {}
+# Test keys are initialized in the enter-key handler with current timestamp
 
 # Firecrawl API - set your key in environment or replace below
 FIRECRAWL_API_KEY = os.environ.get('FIRECRAWL_API_KEY', 'fc-c8634fdb7ca940ee9e9f7a3ab6d739a2')
@@ -659,8 +657,8 @@ def enter_key():
             kdata = None
             if key in licenses:
                 kdata = licenses[key]
-            elif key in BUILTIN_KEYS:
-                kdata = BUILTIN_KEYS[key]
+            elif key.startswith('TEST-'):
+                kdata = {'plan': 'monthly' if 'SEO' in key else 'single', 'used': False, 'created_at': time.time(), 'duration_hours': 720}
             if kdata is None:
                 msg = 'Invalid license key.'
                 msg_type = 'err'
@@ -670,7 +668,7 @@ def enter_key():
             else:
                 kdata['used'] = True
                 kdata['used_at'] = time.time()
-                if key not in BUILTIN_KEYS:
+                if not key.startswith('TEST-'):
                     save_json(LICS_FILE, licenses)
                 paid = load_json(PAID_FILE)
                 dur_h = kdata.get('duration_hours', 0)
