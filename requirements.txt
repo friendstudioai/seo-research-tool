@@ -1,7 +1,12 @@
 flask>=3.0
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
 openpyxl>=3.1
 google-api-python-client>=2.120
 google-auth>=2.0
 google-auth-httplib2>=0.4
+google-auth-oauthlib>=1.0
+cryptography>=41.0
 requests>=2.31
 gunicorn>=21.2
