@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """SEO Keyword Research Web App - Firecrawl + Google Sheets + Excel export."""
 
-import os, sys, re, json, io, threading, time, socks, httplib2, secrets, requests
+import os, sys, re, json, io, threading, time, secrets, requests
+try:
+    import socks, httplib2
+except ImportError:
+    socks = None
+    httplib2 = None
 from flask import Flask, render_template, request, jsonify, send_file, make_response
 from google.oauth2.credentials import Credentials
 from google_auth_httplib2 import AuthorizedHttp
@@ -645,6 +650,8 @@ def generate_excel(r):
 
 
 def write_to_google_sheets(sheet_id, r):
+    if socks is None or httplib2 is None:
+        raise Exception('Google Sheets support not installed (missing PySocks/httplib2)')
     creds = Credentials.from_authorized_user_file(DEFAULT_TOKEN, ['https://www.googleapis.com/auth/spreadsheets'])
     proxy_info = httplib2.ProxyInfo(proxy_type=socks.PROXY_TYPE_HTTP, proxy_host=PROXY_HOST, proxy_port=PROXY_PORT)
     authorized_http = AuthorizedHttp(creds, http=httplib2.Http(proxy_info=proxy_info, timeout=60))
