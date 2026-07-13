@@ -54,8 +54,27 @@ if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
     DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL or 'sqlite:///seo.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', app.secret_key)
+_sk = os.environ.get('FLASK_SECRET_KEY', '')
+if not _sk:
+    print('[FATAL] FLASK_SECRET_KEY environment variable is NOT set.', flush=True)
+    print('[FATAL] OAuth sessions will not work without it.', flush=True)
+    print('[FATAL] Set FLASK_SECRET_KEY in Railway Variables.', flush=True)
+app.secret_key = _sk or 'insecure-dev-key-do-not-use-in-production'
+if not _sk:
+    print('[WARN] Using insecure fallback secret key. OAuth WILL FAIL in production.', flush=True)
 app.config['SESSION_COOKIE_SECURE'] = (os.environ.get('APP_MODE', 'production') != 'development')
+
+# Safety net: create tables on first request if module-level failed
+_app_db_checked = False
+@app.before_request
+def _ensure_db():
+    global _app_db_checked
+    if not _app_db_checked:
+        _app_db_checked = True
+        try:
+            db.create_all()
+        except:
+            pass
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 db = SQLAlchemy(app)
@@ -1112,11 +1131,15 @@ def auth_google_disconnect():
 @app.route('/api/google/status')
 def api_google_status():
     user = get_current_user()
-    if not user: return jsonify({'connected': False, 'sheet': None})
+    uid = session.get('user_id')
+    if not user or not uid:
+        return jsonify({'connected': False, 'sheet': None,
+                        'diag': {'session_has_user_id': bool(uid), 'db_found_user': bool(user),
+                                 'sk_set': bool(os.environ.get('FLASK_SECRET_KEY', ''))}})
     sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
-    return jsonify({'connected': True, 'email': user.email, 'name': user.display_name, 'picture': user.picture_url,
+    return jsonify({
+        'connected': True, 'email': user.email, 'name': user.display_name, 'picture': user.picture_url,
         'sheet': {'id': sheet.spreadsheet_id, 'name': sheet.spreadsheet_name, 'url': sheet.spreadsheet_url} if sheet else None})
-
 @app.route('/api/google/picker-token')
 def api_google_picker_token():
     user = get_current_user()
@@ -1188,11 +1211,13 @@ def get_sheets_service_for_user(user):
 
 
 # Ensure database tables exist (also needed for gunicorn)
-with app.app_context():
-    try:
+print('[DB_INIT] Starting database table creation...', flush=True)
+try:
+    with app.app_context():
         db.create_all()
-    except Exception as e:
-        print(f'[DB] create_all at module level: {e}', flush=True)
+        print('[DB_INIT] create_all_ok', flush=True)
+except Exception as e:
+    print(f'[DB_INIT_ERROR] type={type(e).__name__} message={str(e)[:150]}', flush=True)
 
 if __name__ == '__main__':
     print('[CONFIG] Database already initialized', flush=True)
