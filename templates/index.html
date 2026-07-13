@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SEO Keyword Research Tool</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #1a1a2e; line-height: 1.6; min-height: 100vh; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+        header { text-align: center; margin-bottom: 40px; }
+        header h1 { font-size: 32px; font-weight: 700; color: #1a1a2e; }
+        header p { color: #555; font-size: 16px; margin-top: 8px; }
+        .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 32px; margin-bottom: 24px; }
+        .card h2 { font-size: 18px; font-weight: 600; margin-bottom: 20px; color: #2F5496; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .form-group { display: flex; flex-direction: column; }
+        .form-group.full { grid-column: 1 / -1; }
+        label { font-size: 13px; font-weight: 600; color: #333; margin-bottom: 6px; }
+        input, select { padding: 10px 14px; border: 1.5px solid #ddd; border-radius: 8px; font-size: 14px; transition: border .2s; font-family: inherit; }
+        input:focus, select:focus { outline: none; border-color: #2F5496; box-shadow: 0 0 0 3px rgba(47,84,150,.12); }
+        .btn-primary { background: #2F5496; color: #fff; border: none; padding: 12px 32px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background .2s; }
+        .btn-primary:hover { background: #1e3c6e; }
+        .btn-primary:disabled { background: #99b4d6; cursor: not-allowed; }
+        .btn-success { background: #2d7d46; color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+        .btn-success:hover { background: #1e5c32; }
+        .btn-outline { background: #fff; color: #2F5496; border: 1.5px solid #2F5496; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+        .btn-outline:hover { background: #f0f4ff; }
+        .output-options { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+        #progress { display: none; margin-top: 24px; }
+        .progress-bar { width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; margin-top: 12px; }
+        .progress-fill { height: 100%; background: #2F5496; border-radius: 3px; transition: width .5s; width: 0%; }
+        .progress-text { font-size: 14px; color: #555; margin-top: 8px; }
+        #results { display: none; margin-top: 24px; }
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+        .stat-card { background: #fff; border-radius: 10px; padding: 20px; text-align: center; box-shadow: 0 1px 6px rgba(0,0,0,.06); }
+        .stat-card .num { font-size: 28px; font-weight: 700; color: #2F5496; }
+        .stat-card .label { font-size: 12px; color: #777; margin-top: 4px; }
+        .action-buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 24px; }
+        .sheet-input { display: none; margin-top: 12px; }
+        .sheet-input.show { display: block; }
+        .sheet-input input { width: 100%; }
+        #error-msg { display: none; color: #d32f2f; background: #fce4e4; padding: 12px 16px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+        @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } header h1 { font-size: 24px; } .container { padding: 20px 16px; } }
+        .footer { text-align: center; font-size: 12px; color: #999; margin-top: 40px; }
+    </style>
+</head>
+<body>
+{% if paid is not sameas True %}
+<script>window.location.href = '/pricing';</script>
+{% endif %}
+<div class="container">
+    <header>
+        <h1>🔍 SEO Keyword Research Tool</h1>
+        <p>Enter a seed keyword and get comprehensive SEO analysis powered by Firecrawl</p>
+    </header>
+
+    <div class="card">
+        <h2>Research Parameters</h2>
+        <form id="research-form">
+            <div class="form-grid">
+                <div class="form-group full">
+                    <label for="keyword">Seed Keyword *</label>
+                    <input type="text" id="keyword" name="keyword" value="industrial gate valve" placeholder="e.g. industrial gate valve" required>
+                </div>
+                <div class="form-group">
+                    <label for="country">Country</label>
+                    <select id="country" name="country">
+                        <option value="United States" selected>United States</option>
+                        <option value="United Kingdom">United Kingdom</option>
+                        <option value="Canada">Canada</option>
+                        <option value="Australia">Australia</option>
+                        <option value="Germany">Germany</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="language">Language</label>
+                    <input type="text" id="language" name="language" value="English">
+                </div>
+                <div class="form-group">
+                    <label for="num_results">Number of Results</label>
+                    <input type="number" id="num_results" name="num_results" value="10" min="3" max="20">
+                </div>
+                <div class="form-group">
+                    <label for="output_type">Output Type</label>
+                    <select id="output_type" name="output_type">
+                        <option value="excel">Download Excel (.xlsx)</option>
+                        <option value="csv">Download CSV (.csv)</option>
+                        <option value="sheets">Google Sheets</option>
+                    </select>
+                </div>
+            </div>
+            <div class="sheet-input" id="sheet-input-group">
+                <label for="sheet_id">Google Sheet ID (leave blank to use default)</label>
+                <input type="text" id="sheet_id" name="sheet_id" placeholder="e.g. 1DuA11GWgOuKwLC0Pk09CA5nfx5Ijc77WI70qgk1-ico">
+            </div>
+            <div style="margin-top: 20px; text-align: center;">
+                <button type="submit" class="btn-primary" id="run-btn">▶ Run Research</button>
+            </div>
+        </form>
+    </div>
+
+    <div id="progress">
+        <div class="card">
+            <h2>Running Research</h2>
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+            <div class="progress-text" id="progress-text">Initializing...</div>
+        </div>
+    </div>
+
+    <div id="error-msg"></div>
+
+    <div id="results">
+        <div class="card">
+            <h2>Research Results</h2>
+            <div class="stat-grid" id="stats"></div>
+            <div id="action-area"></div>
+        </div>
+    </div>
+
+    <div class="footer">Powered by Firecrawl · Google Sheets API</div>
+</div>
+
+<script>
+const form = document.getElementById('research-form');
+const runBtn = document.getElementById('run-btn');
+const progress = document.getElementById('progress');
+const progressFill = document.getElementById('progress-fill');
+const progressText = document.getElementById('progress-text');
+const results = document.getElementById('results');
+const stats = document.getElementById('stats');
+const actionArea = document.getElementById('action-area');
+const errorMsg = document.getElementById('error-msg');
+const outputType = document.getElementById('output_type');
+const sheetInput = document.getElementById('sheet-input-group');
+
+outputType.addEventListener('change', () => {
+    sheetInput.classList.toggle('show', outputType.value === 'sheets');
+});
+
+let currentTaskId = null;
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorMsg.style.display = 'none';
+    results.style.display = 'none';
+    progress.style.display = 'block';
+    progressFill.style.width = '0%';
+    progressText.textContent = 'Starting research...';
+    runBtn.disabled = true;
+
+    const formData = new FormData(form);
+    try {
+        const resp = await fetch('/run', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (data.error) { showError(data.error); return; }
+        currentTaskId = data.task_id;
+        pollStatus(currentTaskId);
+    } catch (err) {
+        showError('Failed to start research: ' + err.message);
+    }
+});
+
+async function pollStatus(taskId) {
+    const stages = [
+        { check: (s) => s === 'searching', text: 'Searching for relevant pages...', pct: 15 },
+        { check: (s) => s === 'scraping', text: 'Scraping page content...', pct: 40 },
+        { check: (s) => s === 'analyzing', text: 'Extracting and analyzing keywords...', pct: 70 },
+        { check: (s) => s === 'complete', text: 'Research complete!', pct: 100 },
+    ];
+
+    while (true) {
+        const resp = await fetch('/status/' + taskId);
+        const data = await resp.json();
+        
+        if (data.status === 'error') { showError(data.message); return; }
+        
+        for (const stage of stages) {
+            if (stage.check(data.status)) {
+                progressText.textContent = stage.text;
+                progressFill.style.width = stage.pct + '%';
+                break;
+            }
+        }
+        
+        if (data.status === 'complete') {
+            showResults(data);
+            return;
+        }
+        
+        await new Promise(r => setTimeout(r, 1500));
+    }
+}
+
+function showResults(data) {
+    progressFill.style.width = '100%';
+    runBtn.disabled = false;
+    results.style.display = 'block';
+    
+    stats.innerHTML = [
+        { num: data.serp.length, label: 'SERP Pages' },
+        { num: data.keywords.length, label: 'Keywords Extracted' },
+        { num: data.intent_summary.length, label: 'Intent Types' },
+        { num: data.clusters.length, label: 'Theme Clusters' },
+    ].map(s => '<div class="stat-card"><div class="num">' + s.num + '</div><div class="label">' + s.label + '</div></div>').join('');
+
+    // Intent Summary detail
+    let intentHtml = '<div class="intent-summary"><h3 style="font-size:15px;font-weight:600;color:#2F5496;margin-bottom:12px;">Intent Summary</h3><div class="stat-grid">';
+    data.intent_summary.forEach(function(s) {
+        intentHtml += '<div class="stat-card"><div class="num">' + s.estimated_share + '</div>' +
+            '<div class="label" style="font-weight:600;color:#2F5496;margin-bottom:4px;">' + s.search_intent + '</div>' +
+            '<div style="font-size:10px;color:#888;margin-top:2px;">Examples: ' + s.sample_keywords.substring(0, 60) + '...</div>' +
+            '<div style="font-size:10px;color:#aaa;margin-top:2px;">Pages: ' + s.ranking_pages + '</div></div>';
+    });
+    intentHtml += '</div></div>';
+    actionArea.insertAdjacentHTML('beforebegin', intentHtml);
+    const outputType = document.getElementById('output_type').value;
+    const sheetId = document.getElementById('sheet_id').value;
+    const keyword = document.getElementById('keyword').value;
+    
+    let actions = '';
+    if (outputType === 'excel') {
+        actions = '<a href="/download/' + currentTaskId + '?type=xlsx" class="btn-success">📥 Download Excel (.xlsx)</a>';
+        actions += ' <a href="/download/' + currentTaskId + '?type=csv" class="btn-outline" style="text-decoration:none;display:inline-block;">📄 Download CSV</a>';
+    } else if (outputType === 'csv') {
+        actions = '<a href="/download/' + currentTaskId + '?type=csv" class="btn-success">📄 Download CSV</a>';
+    } else {
+        actions = '<button onclick="exportToSheets()" class="btn-success" id="export-btn">📊 Export to Google Sheets</button>';
+        if (sheetId) {
+            actions += '<p style="margin-top:8px;font-size:13px;color:#666;">Sheet ID: ' + sheetId + '</p>';
+        }
+    }
+    
+    actionArea.innerHTML = '<div class="action-buttons">' + actions + '</div>';
+}
+
+async function exportToSheets() {
+    const btn = document.getElementById('export-btn');
+    btn.disabled = true;
+    btn.textContent = 'Exporting...';
+    const sheetId = document.getElementById('sheet_id').value;
+    
+    try {
+        const resp = await fetch('/export-sheets/' + currentTaskId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sheet_id: sheetId }),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            alert('Error: ' + data.error);
+        } else {
+            actionArea.innerHTML = '<div style="text-align:center;"><p style="color:#2d7d46;font-weight:600;margin-bottom:12px;">✅ Successfully exported to Google Sheets!</p>' +
+                '<a href="' + data.url + '" target="_blank" class="btn-success">📊 Open Google Sheet</a></div>';
+        }
+    } catch (err) {
+        alert('Export failed: ' + err.message);
+    }
+}
+
+function showError(msg) {
+    errorMsg.textContent = msg;
+    errorMsg.style.display = 'block';
+    progress.style.display = 'none';
+    runBtn.disabled = false;
+}
+</script>
+</body>
+</html>
