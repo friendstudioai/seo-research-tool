@@ -112,13 +112,13 @@ PICKER_API_KEY = os.environ.get('GOOGLE_PICKER_API_KEY', '')
 CLOUD_PROJECT_NUMBER = os.environ.get('GOOGLE_CLOUD_PROJECT_NUMBER', '')
 GOOGLE_EXPORT_MODE = os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth')
 
-def get_flow(state=None):
+def get_flow(state=None, code_verifier=None):
     flow = Flow.from_client_config(
         {'web': {'client_id': OAUTH_CLIENT_ID, 'client_secret': OAUTH_CLIENT_SECRET,
                   'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
                   'token_uri': 'https://oauth2.googleapis.com/token'}},
         scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file'],
-        state=state)
+        state=state, code_verifier=code_verifier)
     flow.redirect_uri = OAUTH_REDIRECT_URI
     return flow
 
@@ -1008,26 +1008,39 @@ def health():
 @app.route('/auth/google/start')
 def auth_google_start():
     state = secrets.token_urlsafe(32)
-    session['oauth_state'] = state
-    flow = get_flow(state=state)
+    code_verifier = secrets.token_urlsafe(64)
+    session['google_oauth_state'] = state
+    session['google_oauth_code_verifier'] = code_verifier
+    flow = get_flow(state=state, code_verifier=code_verifier)
     u, _ = flow.authorization_url(access_type='offline', include_granted_scopes='true', prompt='consent')
     return redirect(u)
 
 @app.route('/auth/google/callback')
 def auth_google_callback():
     state = request.args.get('state', '')
-    if not state or state != session.pop('oauth_state', None):
+    saved_state = session.pop('google_oauth_state', None)
+    code_verifier = session.pop('google_oauth_code_verifier', None)
+    if not state or state != saved_state:
         return redirect('/?oauth_error=state_mismatch')
-    if not request.args.get('code'): return redirect('/?oauth_error=no_code')
-    if request.args.get('error'): return redirect('/?oauth_error=cancelled')
+    if not code_verifier:
+        return redirect('/?oauth_error=missing_verifier')
+    if not request.args.get('code'):
+        return redirect('/?oauth_error=no_code')
+    if request.args.get('error'):
+        return redirect('/?oauth_error=cancelled')
     try:
-        flow = get_flow(state=state); flow.fetch_token(code=request.args['code']); creds = flow.credentials
+        flow = get_flow(state=state, code_verifier=code_verifier)
+        flow.fetch_token(authorization_response=request.url)
+        creds = flow.credentials
         import requests as rq
-        r = rq.get('https://www.googleapis.com/oauth2/v3/userinfo', headers={'Authorization': f'Bearer {creds.token}'})
+        r = rq.get('https://www.googleapis.com/oauth2/v3/userinfo',
+                   headers={'Authorization': f'Bearer {creds.token}'})
         info = r.json() if r.ok else {}
     except Exception as e:
-        print(f'[OAUTH] {e}', flush=True); return redirect('/?oauth_error=callback_failed')
-    sub, email, name, pic = info.get('sub',''), info.get('email',''), info.get('name', info.get('email','')), info.get('picture','')
+        print(f'[OAUTH] {e}', flush=True)
+        return redirect('/?oauth_error=callback_failed')
+    sub = info.get('sub', ''); email = info.get('email', '')
+    name = info.get('name', email); pic = info.get('picture', '')
     user = db.session.query(User).filter_by(google_sub=sub).first()
     if not user:
         user = User(google_sub=sub, email=email, display_name=name, picture_url=pic)
@@ -1035,12 +1048,15 @@ def auth_google_callback():
     else:
         user.email, user.display_name, user.picture_url = email, name, pic
     o = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
-    if not o: o = GoogleOAuthCredentials(user_id=user.id); db.session.add(o)
+    if not o:
+        o = GoogleOAuthCredentials(user_id=user.id); db.session.add(o)
     o.encrypted_refresh_token = encrypt_token(creds.refresh_token) if creds.refresh_token else ''
     o.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
-    o.token_expiry = creds.expiry; o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
+    o.token_expiry = creds.expiry
+    o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
     db.session.commit()
-    session['user_id'] = user.id; session['user_email'] = email; session['user_name'] = name; session['user_picture'] = pic
+    session['user_id'] = user.id
+    session['user_email'] = email; session['user_name'] = name; session['user_picture'] = pic
     return redirect('/')
 
 @app.route('/auth/google/disconnect', methods=['POST'])
