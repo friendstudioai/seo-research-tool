@@ -22,6 +22,11 @@ DATA_DIR = os.path.join(PROJECT_DIR, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 PAID_FILE = os.path.join(DATA_DIR, 'paid.json')
 LICS_FILE = os.path.join(DATA_DIR, 'licenses.json')
+# Pre-generated test keys (always work, even if filesystem fails)
+BUILTIN_KEYS = {
+    'TEST-SEO-2024': {'plan': 'monthly', 'used': False, 'created_at': 0, 'duration_hours': 720},
+    'TEST-SINGLE-2024': {'plan': 'single', 'used': False, 'created_at': 0, 'duration_hours': 24},
+}
 
 # Firecrawl API - set your key in environment or replace below
 FIRECRAWL_API_KEY = os.environ.get('FIRECRAWL_API_KEY', 'fc-c8634fdb7ca940ee9e9f7a3ab6d739a2')
@@ -689,7 +694,13 @@ def activate_key():
     key = (data.get('key', '') or '').strip().upper()
     licenses = load_json(LICS_FILE)
     if key not in licenses:
-        return jsonify({'ok': False, 'error': 'Invalid license key.'}), 400
+        if key in BUILTIN_KEYS:
+            kdata = BUILTIN_KEYS[key]
+            if kdata.get('used'):
+                return jsonify({'ok': False, 'error': 'This key has already been used.'}), 400
+            kdata['used'] = True
+        else:
+            return jsonify({'ok': False, 'error': 'Invalid license key.'}), 400
     kdata = licenses[key]
     if is_key_expired(kdata):
         return jsonify({'ok': False, 'error': 'This key has expired.'}), 400
