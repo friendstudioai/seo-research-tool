@@ -41,6 +41,29 @@
         .sheet-input.show { display: block; }
         .sheet-input input { width: 100%; }
         #error-msg { display: none; color: #d32f2f; background: #fce4e4; padding: 12px 16px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+        .google-card { background:#fff; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,.08); padding:24px; margin-bottom:24px; }
+        .google-card h3 { font-size:16px; font-weight:600; color:#1a1a2e; margin-bottom:4px; }
+        .google-card p { font-size:13px; color:#666; margin-bottom:16px; }
+        .google-btn { display:inline-flex; align-items:center; gap:8px; padding:10px 20px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; border:none; text-decoration:none; }
+        .google-btn.primary { background:#2F5496; color:#fff; }
+        .google-btn.primary:hover { background:#1e3c6e; }
+        .google-btn.outline { background:#fff; color:#2F5496; border:1.5px solid #2F5496; }
+        .google-btn.outline:hover { background:#f0f4ff; }
+        .google-btn.danger { background:#fff; color:#d32f2f; border:1.5px solid #d32f2f; }
+        .google-btn.danger:hover { background:#fce4e4; }
+        .google-user { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+        .google-user img { width:40px; height:40px; border-radius:50%; object-fit:cover; }
+        .google-user .info { font-size:13px; }
+        .google-user .name { font-weight:600; color:#1a1a2e; }
+        .google-user .email { color:#666; }
+        .google-status { font-size:12px; color:#2d7d46; font-weight:600; }
+        .sheet-info { display:flex; align-items:center; gap:8px; padding:12px; background:#f8f9fc; border-radius:8px; margin-top:12px; }
+        .sheet-info .icon { font-size:20px; }
+        .sheet-info .name { font-size:13px; font-weight:600; color:#1a1a2e; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .sheet-info .actions { display:flex; gap:6px; }
+        .sheet-btn-sm { padding:6px 12px; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid #ddd; background:#fff; color:#2F5496; text-decoration:none; display:inline-block; }
+        .sheet-btn-sm:hover { background:#f0f4ff; }
+        .hidden { display:none; }
         @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } header h1 { font-size: 24px; } .container { padding: 20px 16px; } }
         .footer { text-align: center; font-size: 12px; color: #999; margin-top: 40px; }
     </style>
@@ -54,6 +77,41 @@
         <h1>🔍 SEO Keyword Research Tool</h1>
         <p>Enter a seed keyword and get comprehensive SEO analysis powered by Firecrawl</p>
     </header>
+
+    <div class="google-card" id="google-section">
+        <h3>Google Sheets Export</h3>
+        <p>Connect your Google account to save research directly to your own Google Sheets.</p>
+        <div id="google-disconnected">
+            <button class="google-btn primary" onclick="connectGoogle()">Connect Google</button>
+        </div>
+        <div id="google-connected" class="hidden">
+            <div class="google-user">
+                <img id="google-user-pic" src="" alt="" onerror="this.style.display='none'">
+                <div class="info">
+                    <div class="name" id="google-user-name"></div>
+                    <div class="email" id="google-user-email"></div>
+                    <div class="google-status">Connected</div>
+                </div>
+            </div>
+            <div id="sheet-choose" style="margin-top:12px;">
+                <button class="google-btn outline" onclick="chooseGoogleSheet()">Choose Google Sheet</button>
+                <button class="google-btn outline" onclick="createNewSheet()" style="margin-left:8px;">Create New Sheet</button>
+            </div>
+            <div id="sheet-selected" class="hidden">
+                <div class="sheet-info">
+                    <span class="icon">📊</span>
+                    <span class="name" id="sheet-name"></span>
+                    <span class="actions">
+                        <a href="#" id="sheet-url" target="_blank" class="sheet-btn-sm">Open</a>
+                        <button class="sheet-btn-sm" onclick="chooseGoogleSheet()">Change</button>
+                    </span>
+                </div>
+            </div>
+            <div style="margin-top:12px;">
+                <button class="google-btn danger" onclick="disconnectGoogle()">Disconnect Google</button>
+            </div>
+        </div>
+    </div>
 
     <div class="card">
         <h2>Research Parameters</h2>
@@ -245,27 +303,19 @@ function showResults(data) {
 }
 
 async function exportToSheets() {
-    const btn = document.getElementById('export-btn');
+    var btn = document.getElementById('export-btn');
     btn.disabled = true;
     btn.textContent = 'Exporting...';
-    const sheetId = document.getElementById('sheet_id').value;
-    
     try {
-        const resp = await fetch('/export-sheets/' + currentTaskId, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sheet_id: sheetId }),
-        });
-        const data = await resp.json();
-        if (data.error) {
-            alert('Error: ' + data.error);
-        } else {
-            actionArea.innerHTML = '<div style="text-align:center;"><p style="color:#2d7d46;font-weight:600;margin-bottom:12px;">✅ Successfully exported to Google Sheets!</p>' +
-                '<a href="' + data.url + '" target="_blank" class="btn-success">📊 Open Google Sheet</a></div>';
+        var resp = await fetch('/export-sheets/' + currentTaskId, { method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        var data = await resp.json();
+        if (data.error) { alert('Error: ' + data.error); btn.disabled=false; btn.textContent='Retry'; }
+        else {
+            actionArea.innerHTML = '<div style="text-align:center;"><p style="color:#2d7d46;font-weight:600;margin-bottom:12px;">✅ Exported to Google Sheets!</p>' +
+                '<a href="' + data.url + '" target="_blank" class="btn-success">📊 Open Sheet</a></div>';
         }
-    } catch (err) {
-        alert('Export failed: ' + err.message);
-    }
+    } catch(e) { alert('Export failed: ' + e.message); btn.disabled=false; btn.textContent='Retry'; }
 }
 
 function showError(msg) {
