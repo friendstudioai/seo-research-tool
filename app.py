@@ -165,6 +165,22 @@ def get_flow(state=None, code_verifier=None):
     flow.redirect_uri = OAUTH_REDIRECT_URI
     return flow
 
+def get_google_connection_status():
+    """Unified function for both server render and API."""
+    user = get_current_user()
+    uid = session.get('user_id')
+    result = {'connected': False, 'email': '', 'name': '', 'picture': '', 'sheet': None}
+    if uid and user:
+        result['connected'] = True
+        result['email'] = user.email or ''
+        result['name'] = user.display_name or ''
+        result['picture'] = user.picture_url or ''
+        sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+        if sheet:
+            result['sheet'] = {'id': sheet.spreadsheet_id, 'name': sheet.spreadsheet_name,
+                              'url': sheet.spreadsheet_url}
+    return result
+
 def get_current_user():
     uid = session.get('user_id')
     if not uid: return None
@@ -678,7 +694,8 @@ def index():
     # Allow localhost access without payment (for testing)
     host = request.headers.get('Host', '')
     if 'localhost' in host or '127.0.0.1' in host:
-        return render_template('index.html', paid=True)
+        gs = get_google_connection_status()
+        return render_template('index.html', paid=True, google_status=gs)
     checkout_id = request.args.get('checkout_id', '')
     has_access = request.cookies.get('seo_access', '') == 'granted'
     if not has_access:
@@ -703,7 +720,8 @@ def index():
             paid[checkout_id] = {'status': 'pending', 'plan': 'checkout'}
             save_json(PAID_FILE, paid)
         has_access = True
-    return render_template('index.html', paid=has_access)
+    google_status = get_google_connection_status()
+    return render_template('index.html', paid=has_access, google_status=google_status)
 
 @app.route('/run', methods=['POST'])
 def run():
@@ -1152,18 +1170,9 @@ def auth_google_disconnect():
 
 @app.route('/api/google/status')
 def api_google_status():
-    user = get_current_user()
-    uid = session.get('user_id')
-    if not user or not uid:
-        return jsonify({'connected': False, 'sheet': None,
-                        'diag': {'session_has_user_id': bool(uid), 'db_found_user': bool(user),
-                                 'sk_set': bool(os.environ.get('FLASK_SECRET_KEY', ''))}})
-    sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
-    resp = jsonify({
-        'connected': True, 'email': user.email, 'name': user.display_name, 'picture': user.picture_url,
-        'sheet': {'id': sheet.spreadsheet_id, 'name': sheet.spreadsheet_name, 'url': sheet.spreadsheet_url} if sheet else None})
-    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
-    return resp
+    return jsonify(get_google_connection_status())
+
+
 @app.route('/api/google/picker-token')
 def api_google_picker_token():
     user = get_current_user()
