@@ -1241,9 +1241,13 @@ def api_google_select_sheet():
     if not c: return jsonify({'error': 'Reconnect'}), 401
     try:
         from googleapiclient.discovery import build
-        meta = build('sheets', 'v4', credentials=c).spreadsheets().get(spreadsheetId=sid).execute()
-        if 'spreadsheet' not in meta.get('mimeType',''): return jsonify({'error': 'Not a spreadsheet'}), 400
-        name, url = meta['properties']['title'], meta['spreadsheetUrl']
+        # Use Drive API to verify MIME type (Sheets API does not return mimeType)
+        drive = build('drive', 'v3', credentials=c)
+        meta = drive.files().get(fileId=sid, fields='id,name,mimeType,webViewLink').execute()
+        mime = meta.get('mimeType', '')
+        if 'spreadsheet' not in mime:
+            return jsonify({'error': 'Not a Google Spreadsheet'}), 400
+        name, url = meta.get('name', ''), meta.get('webViewLink', '')
     except Exception as e:
         e = str(e)[:200]
         if '403' in e: return jsonify({'error':'Permission denied'}), 403
@@ -1253,6 +1257,9 @@ def api_google_select_sheet():
     if not sheet: sheet = SelectedSheet(user_id=user.id); db.session.add(sheet)
     sheet.spreadsheet_id, sheet.spreadsheet_name, sheet.spreadsheet_url = sid, name, url
     db.session.commit()
+    print(f'[PICKER_SELECT] backend_verify_start sheet={sid[:20]}', flush=True)
+    print(f'[PICKER_SELECT] backend_mime_type=spreadsheet', flush=True)
+    print(f'[PICKER_SELECT] db_update_ok', flush=True)
     return jsonify({'ok':True, 'spreadsheetId':sid, 'spreadsheetName':name, 'spreadsheetUrl':url})
 
 @app.route('/api/google/create-sheet', methods=['POST'])
