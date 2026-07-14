@@ -181,7 +181,7 @@
         </div>
     </div>
 
-    <div class="footer">Powered by Firecrawl · Google Sheets API · Version: <span id="version-display">local</span></div>
+    <div class="footer">Powered by Firecrawl · Google Sheets API · Version: <span id="version-display">{{ version if version else "local" }}</span></div>
 </div>
 
 <script id="google-status-data" type="application/json">{{ google_status|tojson|safe }}</script>
@@ -216,6 +216,16 @@ form.addEventListener('submit', async (e) => {
     const formData = new FormData(form);
     try {
         const resp = await fetch('/run', { method: 'POST', body: formData });
+        if (!resp.ok) {
+            const text = await resp.text();
+            showError('Research request failed with HTTP ' + resp.status + '.');
+            return;
+        }
+        if (!resp.headers.get('content-type') || !resp.headers.get('content-type').includes('application/json')) {
+            const text = await resp.text();
+            showError('Research request failed: unexpected response type.');
+            return;
+        }
         const data = await resp.json();
         if (data.error) { showError(data.error); return; }
         currentTaskId = data.task_id;
