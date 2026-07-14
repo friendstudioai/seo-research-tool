@@ -160,7 +160,7 @@ def get_flow(state=None, code_verifier=None):
         {'web': {'client_id': OAUTH_CLIENT_ID, 'client_secret': OAUTH_CLIENT_SECRET,
                   'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
                   'token_uri': 'https://oauth2.googleapis.com/token'}},
-        scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file'],
+        scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets'],
         state=state, code_verifier=code_verifier)
     flow.redirect_uri = OAUTH_REDIRECT_URI
     return flow
@@ -949,7 +949,6 @@ def write_to_google_sheets(svc, sheet_id, r):
         from googleapiclient.discovery import build
     except ImportError:
         raise Exception('Google Sheets support not installed. Install: pip install google-api-python-client')
-    svc = get_google_service()
     sid = parse_sheet_id(sheet_id) or GOOGLE_SHEET_ID_ENV
     if not sid:
         raise Exception('No Google Sheet ID provided. Set GOOGLE_SHEET_ID env var or pass sheet_id.')
@@ -1182,12 +1181,13 @@ def auth_google_callback():
         print('[OAUTH_STAGE] fetch_token_ok', flush=True)
         print(f'[OAUTH_TOKEN] access_token_received={bool(creds.token)}', flush=True)
         print(f'[OAUTH_TOKEN] refresh_token_received={bool(creds.refresh_token)}', flush=True)
-        # Validate required scope: drive.file
+        # Validate required scopes: drive.file + spreadsheets
         granted = set(creds.scopes or [])
-        drive_scope = 'https://www.googleapis.com/auth/drive.file'
-        if drive_scope not in granted and 'drive.file' not in granted:
-            print(f'[OAUTH_ERROR] stage=scope_validation type=MissingRequiredScope', flush=True)
-            raise Exception(f'Missing required scope: {drive_scope}')
+        required = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
+        missing = [s for s in required if s not in granted and s.split('/')[-1] not in granted]
+        if missing:
+            print(f'[OAUTH_ERROR] stage=scope_validation type=MissingRequiredScope missing={missing}', flush=True)
+            raise Exception(f'Missing required scopes: {missing}')
         print('[OAUTH_STAGE] scope_validation_ok', flush=True)
         import requests as rq
         r = rq.get('https://www.googleapis.com/oauth2/v3/userinfo',
@@ -1265,6 +1265,43 @@ def auth_google_disconnect():
 def api_google_status():
     return jsonify(get_google_connection_status())
 
+
+
+@app.route('/api/google/diag')
+def api_google_diag():
+    """Secure diagnostic: returns connection state without tokens."""
+    user = get_current_user()
+    uid = session.get('user_id')
+    result = {
+        'auth_mode': os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth'),
+        'current_user_id': uid,
+        'connected': False,
+        'access_token_present': False,
+        'refresh_token_present': False,
+        'token_expired': None,
+        'granted_scopes': [],
+        'service_account_used': False,
+        'has_selected_sheet': False,
+        'selected_sheet_id': None,
+    }
+    if uid and user:
+        result['connected'] = True
+        result['current_user_email'] = (user.email or '')[:30]
+        oauth = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
+        if oauth:
+            result['granted_scopes'] = [s.strip() for s in (oauth.granted_scopes or '').split(',') if s.strip()]
+            result['access_token_present'] = bool(oauth.encrypted_access_token and oauth.encrypted_access_token.strip())
+            result['refresh_token_present'] = bool(oauth.encrypted_refresh_token and oauth.encrypted_refresh_token.strip())
+            from datetime import datetime, timezone
+            if oauth.token_expiry:
+                e = oauth.token_expiry
+                result['token_expired'] = e < datetime.now(timezone.utc) if e.tzinfo else e < datetime.utcnow()
+        sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+        if sheet:
+            result['has_selected_sheet'] = True
+            result['selected_sheet_id'] = sheet.spreadsheet_id[:10] + '...'
+    print(f'[OAUTH_DIAG] uid={uid} connected={result["connected"]}', flush=True)
+    return jsonify(result)
 
 @app.route('/api/google/picker-token')
 def api_google_picker_token():

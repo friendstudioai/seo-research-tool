@@ -47,7 +47,8 @@ class OAuthTestBase(unittest.TestCase):
         flow.credentials.refresh_token = '1//fake-refresh-token' if has_refresh_token else None
         flow.credentials.scopes = [
             'openid', 'email', 'profile',
-            'https://www.googleapis.com/auth/drive.file'
+            'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/spreadsheets'
         ]
         flow.credentials.expiry = None
         flow.credentials.valid = True
@@ -368,7 +369,28 @@ class TestSessionState(OAuthTestBase):
 
         with self.client.session_transaction() as sess:
             self.assertEqual(sess['google_oauth_state'], real_state)
-            self.assertEqual(sess['google_oauth_code_verifier'], real_verifier)
+        self.assertEqual(sess['google_oauth_code_verifier'], real_verifier)
+
+
+class TestDiag(OAuthTestBase):
+
+    def test_diag_not_connected_by_default(self):
+        resp = self.client.get('/api/google/diag')
+        data = resp.get_json()
+        self.assertIs(data['connected'], False)
+        self.assertEqual(data['auth_mode'], 'user_oauth')
+
+    def test_diag_returns_booleans_no_tokens(self):
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = 999
+        resp = self.client.get('/api/google/diag')
+        data = resp.get_json()
+        for key in data:
+            if 'token' in key.lower() or 'secret' in key.lower():
+                val = data[key]
+                if isinstance(val, str):
+                    self.assertLess(len(val), 50,
+                        f'{key} should not contain long token values')
 
 
 if __name__ == '__main__':
