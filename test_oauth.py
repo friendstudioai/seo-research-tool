@@ -13,7 +13,6 @@ os.environ['GOOGLE_OAUTH_REDIRECT_URI'] = 'https://localhost/callback'
 os.environ['TOKEN_ENCRYPTION_KEY'] = ''  # no encryption for tests
 os.environ['DATABASE_URL'] = ''  # use SQLite
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app as flask_app
 
 app = flask_app.app

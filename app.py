@@ -55,6 +55,7 @@ else:
 # Version display
 GIT_COMMIT = os.environ.get('RAILWAY_GIT_COMMIT_SHA', '')[:7] or 'local'
 print(f'[CONFIG] Version: {GIT_COMMIT}', flush=True)
+print(f'[PRODUCTION_SOURCE] file={__file__}', flush=True)
 if not os.environ.get('FLASK_SECRET_KEY'):
     print('[WARN] FLASK_SECRET_KEY not set. OAuth sessions will be lost after restart.', flush=True)
     print('[HINT] Set FLASK_SECRET_KEY in Railway Variables to a random string.', flush=True)
@@ -160,7 +161,7 @@ def get_flow(state=None, code_verifier=None):
         {'web': {'client_id': OAUTH_CLIENT_ID, 'client_secret': OAUTH_CLIENT_SECRET,
                   'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
                   'token_uri': 'https://oauth2.googleapis.com/token'}},
-        scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file'],
+        scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets'],
         state=state, code_verifier=code_verifier)
     flow.redirect_uri = OAUTH_REDIRECT_URI
     return flow
@@ -949,7 +950,6 @@ def write_to_google_sheets(svc, sheet_id, r):
         from googleapiclient.discovery import build
     except ImportError:
         raise Exception('Google Sheets support not installed. Install: pip install google-api-python-client')
-    svc = get_google_service()
     sid = parse_sheet_id(sheet_id) or GOOGLE_SHEET_ID_ENV
     if not sid:
         raise Exception('No Google Sheet ID provided. Set GOOGLE_SHEET_ID env var or pass sheet_id.')
@@ -1145,7 +1145,7 @@ def admin_page():
 
 @app.route('/health')
 def health():
-    return 'OK', 200
+    return jsonify({"status": "ok"})
 
 
 # --- Google OAuth Routes ---
@@ -1180,12 +1180,15 @@ def auth_google_callback():
         flow.fetch_token(authorization_response=request.url)
         creds = flow.credentials
         print('[OAUTH_STAGE] fetch_token_ok', flush=True)
-        # Validate required scope: drive.file
+        print(f'[OAUTH_TOKEN] access_token_received={bool(creds.token)}', flush=True)
+        print(f'[OAUTH_TOKEN] refresh_token_received={bool(creds.refresh_token)}', flush=True)
+        # Validate required scopes: drive.file + spreadsheets
         granted = set(creds.scopes or [])
-        drive_scope = 'https://www.googleapis.com/auth/drive.file'
-        if drive_scope not in granted and 'drive.file' not in granted:
-            print(f'[OAUTH_ERROR] stage=scope_validation type=MissingRequiredScope', flush=True)
-            raise Exception(f'Missing required scope: {drive_scope}')
+        required = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
+        missing = [s for s in required if s not in granted and s.split('/')[-1] not in granted]
+        if missing:
+            print(f'[OAUTH_ERROR] stage=scope_validation type=MissingRequiredScope missing={missing}', flush=True)
+            raise Exception(f'Missing required scopes: {missing}')
         print('[OAUTH_STAGE] scope_validation_ok', flush=True)
         import requests as rq
         r = rq.get('https://www.googleapis.com/oauth2/v3/userinfo',
@@ -1214,6 +1217,12 @@ def auth_google_callback():
         if creds.refresh_token:
             o.encrypted_refresh_token = encrypt_token(creds.refresh_token)
             print('[OAUTH_STAGE] refresh_token_saved', flush=True)
+        elif not o.encrypted_refresh_token:
+            o.encrypted_refresh_token = ''
+            print('[OAUTH_STAGE] refresh_token_empty_set', flush=True)
+        else:
+            has_existing = bool(o.encrypted_refresh_token)
+            print(f'[OAUTH_TOKEN] existing_refresh_token_preserved={has_existing}', flush=True)
         o.encrypted_access_token = encrypt_token(creds.token) if creds.token else ''
         o.token_expiry = creds.expiry
         o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
@@ -1257,6 +1266,51 @@ def auth_google_disconnect():
 def api_google_status():
     return jsonify(get_google_connection_status())
 
+
+
+@app.route('/api/google/diag')
+def api_google_diag():
+    """Secure diagnostic: returns connection state without tokens."""
+    user = get_current_user()
+    uid = session.get('user_id')
+    running_file = os.path.basename(__file__) if '__file__' in dir() else 'unknown'
+    result = {
+        'running_file': running_file,
+        'git_commit': GIT_COMMIT,
+        'auth_mode': os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth'),
+        'current_user_id': uid,
+        'connected': False,
+        'access_token_present': False,
+        'refresh_token_present': False,
+        'token_expired': None,
+        'configured_scopes': [
+            'openid', 'email', 'profile',
+            'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/spreadsheets',
+        ],
+        'granted_scopes': [],
+        'service_account_used': False,
+        'has_selected_sheet': False,
+        'selected_sheet_id': None,
+    }
+    if uid and user:
+        result['connected'] = True
+        result['current_user_email'] = (user.email or '')[:30]
+        oauth = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
+        if oauth:
+            result['granted_scopes'] = [s.strip() for s in (oauth.granted_scopes or '').split(',') if s.strip()]
+            result['access_token_present'] = bool(oauth.encrypted_access_token and oauth.encrypted_access_token.strip())
+            result['refresh_token_present'] = bool(oauth.encrypted_refresh_token and oauth.encrypted_refresh_token.strip())
+            from datetime import datetime, timezone
+            if oauth.token_expiry:
+                e = oauth.token_expiry
+                result['token_expired'] = e < datetime.now(timezone.utc) if e.tzinfo else e < datetime.utcnow()
+        sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+        if sheet:
+            result['has_selected_sheet'] = True
+            result['selected_sheet_id'] = sheet.spreadsheet_id[:10] + '...'
+    print(f'[OAUTH_DIAG] uid={uid} connected={result["connected"]}', flush=True)
+    return jsonify(result)
 
 @app.route('/api/google/picker-token')
 def api_google_picker_token():
