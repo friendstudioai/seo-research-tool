@@ -3,34 +3,45 @@
 {% block topbar_title %}Keyword Research{% endblock %}
 {% block content %}
 
-<p style="color:var(--text-secondary);margin-bottom:20px;">Discover keyword opportunities, understand search intent, organize related topics, and export actionable SEO research.</p>
-
-<div id="google-connect-area" style="margin-bottom:16px;">
+<!-- Module A: Google Sheets Connection -->
+<div class="module-card">
+<div class="card">
+  <div class="card-title">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="20" rx="2"/></svg>
+    Google Sheets Connection
+  </div>
+  <div class="card-subtitle">Connect your Google account to create, select, and export research to Google Sheets.</div>
   <div id="google-connected" class="sheet-info" style="display:none;">
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-      <img id="user-pic" src="" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
-      <span id="user-name" style="font-weight:500;"></span>
-      <span id="user-email" style="font-size:13px;color:var(--text-muted);"></span>
-      <span style="font-size:12px;color:#2d7d46;">Connected</span>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <img id="user-pic" src="" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;">
+      <span id="user-name" style="font-weight:500;font-size:13px;"></span>
+      <span id="user-email" style="font-size:12px;color:var(--text-muted);"></span>
+      <span style="font-size:11px;color:var(--success);font-weight:500;">Connected</span>
       <button class="btn btn-ghost btn-sm" onclick="disconnectGoogle()">Disconnect</button>
     </div>
-    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
-      <button class="btn btn-outline btn-sm" onclick="chooseGoogleSheet()">Choose Google Sheet</button>
-      <button class="btn btn-outline btn-sm" id="create-sheet-btn" type="button" onclick="createNewSheet()">Create New Sheet</button>
+    <div class="google-connect-actions">
+      <button class="btn btn-outline-accent btn-sm" onclick="chooseGoogleSheet()">Choose Google Sheet</button>
+      <button class="btn btn-outline-accent btn-sm" id="create-sheet-btn" type="button" onclick="createNewSheet()">Create New Sheet</button>
     </div>
-    <div id="sheet-selected" class="sheet-info visible" style="margin-top:8px;">
-      <span style="font-size:13px;">Selected: <strong id="sheet-name"></strong></span>
-      <a id="sheet-url" href="#" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:underline;">Open Sheet</a>
+    <div id="sheet-selected" class="google-sheet-info">
+      <span>Selected: <strong id="sheet-name"></strong></span>
+      <a id="sheet-url" href="#" target="_blank" class="btn btn-ghost btn-sm" style="text-decoration:underline;">Open</a>
     </div>
   </div>
   <div id="google-disconnected">
-    <p style="font-size:14px;color:var(--text-secondary);margin-bottom:8px;">Connect your Google account to save research directly to your own Google Sheets.</p>
-    <a href="/auth/google/start" class="btn btn-accent">Connect Google</a>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">Connect your Google account to create, select, and export research to Google Sheets.</p>
+    <a href="/auth/google/start" class="btn btn-accent btn-sm">Connect Google</a>
   </div>
 </div>
+</div>
 
+<!-- Module B: Research Configuration -->
+<div class="module-card">
 <div class="card" id="research-form">
-  <h2 class="card-title">Research Parameters</h2>
+  <div class="card-title">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+    Research Configuration
+  </div>
   <form onsubmit="event.preventDefault();runResearch();">
   <div class="form-grid">
     <div class="form-group full">
@@ -53,15 +64,16 @@
       <label for="output_type">Output Type</label>
       <select id="output_type"><option value="excel">Download Excel</option><option value="csv">Download CSV</option><option value="google_sheets">Google Sheets</option></select>
     </div>
-    <div class="form-group full">
-      <button id="run-btn" class="btn btn-primary" type="submit">Run Research</button>
-    </div>
   </div>
-  <div id="sheet-input-group" class="form-group" style="margin-top:12px;display:none;">
+  <div id="sheet-input-group" class="form-group" style="margin-top:8px;display:none;">
     <label for="sheet_id">Google Sheet ID (leave blank to use default)</label>
     <input type="text" id="sheet_id" placeholder="Leave blank to use default">
   </div>
+  <div class="form-footer">
+    <button id="run-btn" class="btn btn-primary" type="submit">Run Research</button>
+  </div>
   </form>
+</div>
 </div>
 
 <div id="error-msg" class="error-msg"></div>
@@ -71,16 +83,25 @@
   <div id="progress-text" class="progress-text">Starting research...</div>
 </div>
 
-<div id="results" class="results-section">
-  <div class="card" id="results-card">
-    <h2 class="card-title">Research Results</h2>
-    <div id="action-area"></div>
+<!-- Module C: Research Results -->
+<div class="module-card">
+<div class="card" id="results-card">
+  <div class="card-title">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+    Research Results
+  </div>
+  <div id="action-area"></div>
+  <div id="results" class="results-section">
     <div id="stats" class="stat-grid"></div>
     <div id="serp-area"></div>
     <div id="keyword-area"></div>
     <div id="cluster-area"></div>
     <div id="intent-area"></div>
   </div>
+  <div id="results-empty" class="empty-results" style="display:block;">
+    Run a keyword research task to view search intent, keyword opportunities, topic clusters, and export options.
+  </div>
+</div>
 </div>
 
 <div id="errorMsg" style="display:none;"></div>
@@ -88,7 +109,17 @@
 {% endblock %}
 {% block extra_scripts %}
 <script src="/static/js/research.js"></script>
-
 <script id="google-status-data" type="application/json">{{ google_status|tojson|safe }}</script>
-
+<script>
+(function(){
+  var re = document.getElementById('results-empty');
+  var r  = document.getElementById('results');
+  if (re && r) {
+    var o = new MutationObserver(function(){
+      if (r.style.display === 'block') { re.style.display = 'none'; }
+    });
+    o.observe(r, {attributes:true,attributeFilter:['style']});
+  }
+})();
+</script>
 {% endblock %}
