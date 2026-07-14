@@ -714,7 +714,7 @@ def run():
         kw, request.form.get('country', 'United States'), request.form.get('language', 'English'),
         int(request.form.get('num_results', 10)), task_id))
     t.daemon = True; t.start()
-    return jsonify({'task_id': task_id})
+    resp = jsonify({'task_id': task_id})
 
 @app.route('/status/<task_id>')
 def status(task_id):
@@ -1159,9 +1159,11 @@ def api_google_status():
                         'diag': {'session_has_user_id': bool(uid), 'db_found_user': bool(user),
                                  'sk_set': bool(os.environ.get('FLASK_SECRET_KEY', ''))}})
     sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
-    return jsonify({
+    resp = jsonify({
         'connected': True, 'email': user.email, 'name': user.display_name, 'picture': user.picture_url,
         'sheet': {'id': sheet.spreadsheet_id, 'name': sheet.spreadsheet_name, 'url': sheet.spreadsheet_url} if sheet else None})
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return resp
 @app.route('/api/google/picker-token')
 def api_google_picker_token():
     user = get_current_user()
@@ -1240,6 +1242,12 @@ try:
         print('[DB_INIT] create_all_ok', flush=True)
 except Exception as e:
     print(f'[DB_INIT_ERROR] type={type(e).__name__} message={str(e)[:150]}', flush=True)
+
+@app.after_request
+def _no_cache(response):
+    if response.content_type and 'application/json' in response.content_type:
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return response
 
 if __name__ == '__main__':
     print('[CONFIG] Database already initialized', flush=True)
