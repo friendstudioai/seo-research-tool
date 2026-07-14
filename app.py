@@ -194,22 +194,34 @@ def get_user_credentials(user):
     token = decrypt_token(oauth.encrypted_access_token or '')
     refresh = decrypt_token(oauth.encrypted_refresh_token) if oauth.encrypted_refresh_token else None
     if not token and not refresh:
-        print(f'[AUTH] No credentials for user {user.id}', flush=True)
+        print(f'[SHEETS_AUTH] No credentials for user {user.id}', flush=True)
         return None
+    scopes = None
+    if oauth.granted_scopes:
+        scopes = [s.strip() for s in oauth.granted_scopes.split(',') if s.strip()]
+    print(f'[SHEETS_AUTH] access_token_present={bool(token)}', flush=True)
+    print(f'[SHEETS_AUTH] refresh_token_present={bool(refresh)}', flush=True)
+    print(f'[SHEETS_AUTH] scopes_count={len(scopes) if scopes else 0}', flush=True)
     creds = google.oauth2.credentials.Credentials(
         token=token, refresh_token=refresh,
         token_uri='https://oauth2.googleapis.com/token',
         client_id=OAUTH_CLIENT_ID, client_secret=OAUTH_CLIENT_SECRET,
-        scopes=oauth.granted_scopes.split(',') if oauth.granted_scopes else None)
-    if refresh and (not creds.valid and creds.expired):
-        try:
-            creds.refresh(google.auth.transport.requests.Request())
-            oauth.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
-            oauth.token_expiry = creds.expiry
-            db.session.commit()
-            print(f'[AUTH] Token refreshed for user {user.id}', flush=True)
-        except Exception as e:
-            print(f'[AUTH] Token refresh failed for user {user.id}', flush=True)
+        scopes=scopes)
+    if not creds.valid:
+        if refresh:
+            try:
+                creds.refresh(google.auth.transport.requests.Request())
+                oauth.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
+                oauth.token_expiry = creds.expiry
+                db.session.commit()
+                print(f'[SHEETS_AUTH] token_refreshed=true', flush=True)
+            except Exception as e:
+                print(f'[SHEETS_AUTH] token_refresh_failed type={type(e).__name__}', flush=True)
+                return None
+        else:
+            print(f'[SHEETS_AUTH] token_expired_no_refresh', flush=True)
+            return None
+    print(f'[SHEETS_AUTH] credentials_loaded=true', flush=True)
     return creds
 
 
@@ -794,7 +806,23 @@ def export_sheets(task_id):
         user = get_current_user()
         print(f'[SHEETS_EXPORT] user_loaded={bool(user)}', flush=True)
         svc = get_sheets_service_for_user(user)
+        if svc:
+            try:
+                sid = None
+                if user:
+                    sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
+                    if sheet: sid = sheet.spreadsheet_id
+                if sid:
+                    svc.spreadsheets().get(spreadsheetId=sid, fields='spreadsheetId').execute()
+                    print(f'[SHEETS_EXPORT] sheets_preflight_ok', flush=True)
+            except Exception as pe:
+                est = str(pe)[:200]
+                print(f'[SHEETS_EXPORT] sheets_preflight_403', flush=True)
+                return jsonify({'success': False, 'error': 'Google Sheets permission check failed.', 'code': 'sheets_preflight_403'}), 403
         if not svc: return jsonify({'error': 'Google Sheets unavailable. Set GOOGLE_SERVICE_ACCOUNT_JSON or connect Google.'}), 400
+        mode = os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth')
+        print(f'[SHEETS_EXPORT] auth_mode={mode}', flush=True)
+        print(f'[SHEETS_EXPORT] service_account_used=false', flush=True)
         print(f'[SHEETS_EXPORT] svc_loaded={bool(svc)}', flush=True)
         sid = ''
         if user:
@@ -806,6 +834,14 @@ def export_sheets(task_id):
         if not sid: sid = os.environ.get('GOOGLE_SHEET_ID', '')
         if not sid: return jsonify({'error': 'No sheet selected. Choose a sheet or set GOOGLE_SHEET_ID.'}), 400
         print(f'[SHEETS_EXPORT] write_start sheet={sid[:20]}', flush=True)
+                # Preflight check: verify Sheets API access
+        if svc and sid:
+            try:
+                svc.spreadsheets().get(spreadsheetId=sid, fields='spreadsheetId').execute()
+                print('[SHEETS_EXPORT] sheets_preflight_ok', flush=True)
+            except Exception:
+                print('[SHEETS_EXPORT] sheets_preflight_403', flush=True)
+                return jsonify({'success':False,'error':'Google Sheets permission check failed.','code':'sheets_preflight_403'}), 403
         write_to_google_sheets(svc, sid, r)
         print(f'[SHEETS_EXPORT] write_ok', flush=True)
         return jsonify({'url': f'https://docs.google.com/spreadsheets/d/{sid}/edit', 'sheet_id': sid})
