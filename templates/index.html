@@ -98,8 +98,8 @@
                 </div>
             </div>
             <div id="sheet-choose" style="margin-top:12px;">
-                <button class="google-btn outline" onclick="chooseGoogleSheet()">Choose Google Sheet</button>
-                <button class="google-btn outline" onclick="createNewSheet()" style="margin-left:8px;">Create New Sheet</button>
+                <button type="button" class="google-btn outline" onclick="chooseGoogleSheet()">Choose Google Sheet</button>
+                <button type="button" class="google-btn outline" onclick="createNewSheet()" style="margin-left:8px;">Create New Sheet</button>
             </div>
             <div id="sheet-selected" class="hidden">
                 <div class="sheet-info">
@@ -112,7 +112,7 @@
                 </div>
             </div>
             <div style="margin-top:12px;">
-                <button class="google-btn danger" onclick="disconnectGoogle()">Disconnect Google</button>
+                <button type="button" class="google-btn danger" onclick="disconnectGoogle()">Disconnect Google</button>
             </div>
         </div>
         {% endif %}
@@ -306,6 +306,63 @@ function showResults(data) {
     }
     
     actionArea.innerHTML = '<div class="action-buttons">' + actions + '</div>';
+}
+
+// Google Sheet operations (global scope for onclick)
+var _pickerLoaded = false;
+function pickerCallback(data) {
+    if (data.action == 'picked') {
+        var doc = data.docs[0];
+        fetch('/api/google/select-sheet', {method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({spreadsheetId:doc.id, spreadsheetName:doc.name, spreadsheetUrl:doc.url})})
+        .then(function(r){return r.json();}).then(function(resp){
+            if (resp.ok) {
+                document.getElementById('sheet-selected').className='sheet-info';
+                document.getElementById('sheet-name').textContent=resp.spreadsheetName;
+                document.getElementById('sheet-url').href=resp.spreadsheetUrl;
+            } else { showError(resp.error||'Select failed.'); }
+        }).catch(function(){ showError('Unable to select sheet.'); });
+    }
+}
+function loadPickerApi(callback) {
+    if (_pickerLoaded) { if(callback)callback(); return; }
+    var s = document.createElement('script');
+    s.src = 'https://apis.google.com/js/api.js';
+    s.onload = function(){ gapi.load('picker', {callback:function(){_pickerLoaded=true; if(callback)callback();}}); };
+    document.body.appendChild(s);
+}
+function chooseGoogleSheet() {
+    fetch('/api/google/picker-token', {method:'GET', credentials:'same-origin'})
+    .then(function(r){return r.json();}).then(function(d){
+        if (d.error) { showError(d.error); return; }
+        loadPickerApi(function(){
+            var view = new google.picker.View(google.picker.ViewId.SPREADSHEETS);
+            new google.picker.PickerBuilder().addView(view).setOAuthToken(d.accessToken)
+                .setDeveloperKey(d.pickerApiKey).setAppId(d.projectNumber)
+                .setCallback(pickerCallback).build().setVisible(true);
+        });
+    }).catch(function(){ showError('Unable to open sheet picker.'); });
+}
+function createNewSheet() {
+    var btn = document.activeElement; btn && (btn.disabled=true, btn.textContent='Creating...');
+    var kw = document.getElementById('keyword').value || 'research';
+    fetch('/api/google/create-sheet', {method:'POST', credentials:'same-origin',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({keyword:kw})})
+    .then(function(r){return r.json();}).then(function(d){
+        btn && (btn.disabled=false, btn.textContent='Create New Sheet');
+        if (d.ok) {
+            document.getElementById('sheet-selected').className='sheet-info';
+            document.getElementById('sheet-name').textContent=d.spreadsheetName;
+            document.getElementById('sheet-url').href=d.spreadsheetUrl;
+        } else { showError(d.error||'Create failed.'); }
+    }).catch(function(){ showError('Unable to create sheet.'); btn&&(btn.disabled=false); });
+}
+function disconnectGoogle() {
+    fetch('/auth/google/disconnect', {method:'POST', credentials:'same-origin'})
+    .then(function(r){return r.json();}).then(function(d){
+        if (d.ok) { location.reload(); }
+        else { showError('Disconnect failed.'); }
+    }).catch(function(){ showError('Disconnect failed.'); });
 }
 
 async function exportToSheets() {
