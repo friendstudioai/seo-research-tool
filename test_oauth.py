@@ -392,5 +392,144 @@ class TestDiag(OAuthTestBase):
                         f'{key} should not contain long token values')
 
 
+class TestCreateSheet(OAuthTestBase):
+
+    def test_create_sheet_deletes_default_and_adds_targets(self):
+        """Create New Sheet must delete blank default and create 4 target sheets."""
+        from unittest.mock import MagicMock, patch
+
+        # Pre-create a connected user
+        with app.app_context():
+            user = User(google_sub='create_user', email='create@example.com',
+                        display_name='Create Test')
+            db.session.add(user)
+            db.session.flush()
+            oauth = GoogleOAuthCredentials(user_id=user.id,
+                                           encrypted_refresh_token='rt_',
+                                           encrypted_access_token='at_',
+                                           granted_scopes='openid,email,profile,drive.file,spreadsheets')
+            db.session.add(oauth)
+            db.session.commit()
+            uid = user.id
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = uid
+            sess.permanent = True
+
+        # Mock the Google Sheets API
+        mock_svc = MagicMock()
+        mock_create_result = {
+            'spreadsheetId': 'test_sheet_id_12345',
+            'properties': {'title': 'SEO Keyword Research - test - 2026-07-14'},
+            'spreadsheetUrl': 'https://docs.google.com/spreadsheets/d/test_sheet_id_12345/edit'
+        }
+        mock_get_result = {
+            'sheets': [
+                {'properties': {'sheetId': 0, 'title': 'Sheet1', 'index': 0}}
+            ]
+        }
+        mock_batch_result = {'replies': [{}, {}, {}, {}, {}]}
+
+        mock_spreadsheets = MagicMock()
+        mock_spreadsheets.create().execute.return_value = mock_create_result
+        mock_spreadsheets.get().execute.return_value = mock_get_result
+        batch_update_result = MagicMock()
+        batch_update_result.execute.return_value = mock_batch_result
+        mock_spreadsheets.batchUpdate.return_value = batch_update_result
+        mock_svc.spreadsheets.return_value = mock_spreadsheets
+
+        with patch('googleapiclient.discovery.build', return_value=mock_svc):
+            resp = self.client.post('/api/google/create-sheet',
+                                    json={'keyword': 'test'},
+                                    content_type='application/json')
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data.get('ok'))
+        self.assertEqual(data['spreadsheetId'], 'test_sheet_id_12345')
+
+        # Verify batchUpdate was called with correct requests
+        mock_spreadsheets.batchUpdate.assert_called_once()
+        call_args = mock_spreadsheets.batchUpdate.call_args[1]
+        requests_body = call_args['body']['requests']
+
+        # Should have: 4 addSheet requests + 1 deleteSheet request = 5
+        self.assertEqual(len(requests_body), 5)
+
+        # Check addSheet requests for the 4 target sheets
+        add_sheets = [r for r in requests_body if 'addSheet' in r]
+        self.assertEqual(len(add_sheets), 4)
+        target_names = {r['addSheet']['properties']['title'] for r in add_sheets}
+        self.assertEqual(target_names, {'SERP_Pages', 'Keywords', 'Clusters', 'Intent_Summary'})
+
+        # Check deleteSheet request for the default blank sheet
+        delete_sheets = [r for r in requests_body if 'deleteSheet' in r]
+        self.assertEqual(len(delete_sheets), 1)
+        self.assertEqual(delete_sheets[0]['deleteSheet']['sheetId'], 0)
+
+        # Verify the sheet is saved in the database
+        with app.app_context():
+            sheet = db.session.query(flask_app.SelectedSheet).filter_by(user_id=uid).first()
+            self.assertIsNotNone(sheet)
+            self.assertEqual(sheet.spreadsheet_id, 'test_sheet_id_12345')
+
+    def test_create_sheet_handles_no_default_sheet_gracefully(self):
+        """When there's no default sheet named Sheet1/工作表1, no deleteSheet is sent."""
+        from unittest.mock import MagicMock, patch
+
+        with app.app_context():
+            user = User(google_sub='create_user2', email='create2@example.com',
+                        display_name='Create Test 2')
+            db.session.add(user)
+            db.session.flush()
+            oauth = GoogleOAuthCredentials(user_id=user.id,
+                                           encrypted_refresh_token='rt2',
+                                           encrypted_access_token='at2',
+                                           granted_scopes='openid,email,profile,drive.file,spreadsheets')
+            db.session.add(oauth)
+            db.session.commit()
+            uid = user.id
+
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = uid
+            sess.permanent = True
+
+        mock_svc = MagicMock()
+        mock_create_result = {
+            'spreadsheetId': 'test_sheet_id_no_default',
+            'properties': {'title': 'Test - no default'},
+            'spreadsheetUrl': 'https://docs.google.com/spreadsheets/d/test_sheet_id_no_default/edit'
+        }
+        # No default Sheet1 - custom named sheet instead
+        mock_get_result = {
+            'sheets': [
+                {'properties': {'sheetId': 0, 'title': 'CustomTab', 'index': 0}}
+            ]
+        }
+
+        mock_spreadsheets2 = MagicMock()
+        mock_spreadsheets2.create().execute.return_value = mock_create_result
+        mock_spreadsheets2.get().execute.return_value = mock_get_result
+        batch_update_result2 = MagicMock()
+        batch_update_result2.execute.return_value = {'replies': [{},{},{},{}]}
+        mock_spreadsheets2.batchUpdate.return_value = batch_update_result2
+        mock_svc.spreadsheets.return_value = mock_spreadsheets2
+
+        with patch('googleapiclient.discovery.build', return_value=mock_svc):
+            resp = self.client.post('/api/google/create-sheet',
+                                    json={'keyword': 'test'},
+                                    content_type='application/json')
+
+        self.assertEqual(resp.status_code, 200)
+        # Should still create 4 target sheets but NOT delete the custom-named tab
+        mock_spreadsheets2.batchUpdate.assert_called_once()
+        call_args = mock_spreadsheets2.batchUpdate.call_args[1]
+        requests_body = call_args['body']['requests']
+        # 4 addSheet requests, no deleteSheet
+        self.assertEqual(len(requests_body), 4)
+        delete_sheets = [r for r in requests_body if 'deleteSheet' in r]
+        self.assertEqual(len(delete_sheets), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

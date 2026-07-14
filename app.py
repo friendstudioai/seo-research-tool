@@ -1362,8 +1362,21 @@ def api_google_create_sheet():
     title = f'SEO Keyword Research - {kw} - {datetime.date.today().isoformat()}'
     try:
         from googleapiclient.discovery import build
-        s = build('sheets','v4',credentials=c).spreadsheets().create(body={'properties':{'title':title}}).execute()
+        svc = build('sheets', 'v4', credentials=c)
+        s = svc.spreadsheets().create(body={'properties':{'title':title}}).execute()
         sid, name, url = s['spreadsheetId'], s['properties']['title'], s['spreadsheetUrl']
+        # Remove default blank sheet and create 4 target sheets
+        meta = svc.spreadsheets().get(spreadsheetId=sid, fields='sheets.properties').execute()
+        batch_reqs = []
+        for sn in ('SERP_Pages', 'Keywords', 'Clusters', 'Intent_Summary'):
+            batch_reqs.append({'addSheet': {'properties': {'title': sn}}})
+        default_names = {'Sheet1', '工作表1'}
+        for sheet in meta.get('sheets', []):
+            t = sheet.get('properties', {}).get('title', '')
+            if t in default_names:
+                batch_reqs.append({'deleteSheet': {'sheetId': sheet['properties']['sheetId']}})
+        if batch_reqs:
+            svc.spreadsheets().batchUpdate(spreadsheetId=sid, body={'requests': batch_reqs}).execute()
     except Exception as e: return jsonify({'error':f'Create failed: {str(e)[:200]}'}), 500
     sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
     if not sheet: sheet = SelectedSheet(user_id=user.id); db.session.add(sheet)
