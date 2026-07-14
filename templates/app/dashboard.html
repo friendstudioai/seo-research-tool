@@ -1,0 +1,81 @@
+{% extends "layouts/app.html" %}
+{% block title %}Dashboard - FriendStudio{% endblock %}
+{% block topbar_title %}Dashboard{% endblock %}
+{% block content %}
+
+<div class="welcome">
+  <h1 style="font-size:28px;font-weight:700;margin-bottom:4px;">Good afternoon, welcome to FriendStudio</h1>
+  <p style="color:var(--text-secondary);margin-bottom:28px;">Turn search data into clearer marketing decisions.</p>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-card-value">{{ stats.research_runs }}</div>
+    <div class="stat-card-label">Research Runs</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card-value">{{ stats.keywords_discovered }}</div>
+    <div class="stat-card-label">Keywords Discovered</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card-value">{{ stats.reports_generated }}</div>
+    <div class="stat-card-label">Reports Generated</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card-value">{{ stats.active_skill_packs }}</div>
+    <div class="stat-card-label">Active Skill Packs</div>
+  </div>
+</div>
+
+<h2 style="font-size:18px;font-weight:600;margin-bottom:12px;">Skill Packs</h2>
+<div class="skill-grid">
+  <div class="skill-card">
+    <div class="skill-card-icon" style="background:#e8f0fe;color:#1967d2;">&#128269;</div>
+    <div class="skill-card-name">Keyword Research</div>
+    <div class="skill-card-status available">Available</div>
+    <div class="skill-card-desc">Discover keyword opportunities, analyze intent, organize topic clusters, and export structured research.</div>
+    <a href="/app/skills/keyword-research" class="btn btn-accent btn-sm skill-card-btn">Open Skill Pack</a>
+  </div>
+  <div class="skill-card">
+    <div class="skill-card-icon" style="background:#fef7e0;color:#e37400;">&#128200;</div>
+    <div class="skill-card-name">SERP Analyzer</div>
+    <div class="skill-card-status coming-soon">Coming Soon</div>
+    <div class="skill-card-desc">Analyze search engine results pages to identify ranking opportunities and content gaps.</div>
+    <button class="btn btn-outline btn-sm skill-card-btn" disabled>Coming Soon</button>
+  </div>
+  <div class="skill-card">
+    <div class="skill-card-icon" style="background:#e6f4ea;color:#137333;">&#128196;</div>
+    <div class="skill-card-name">Content Brief</div>
+    <div class="skill-card-status coming-soon">Coming Soon</div>
+    <div class="skill-card-desc">Generate comprehensive content briefs with topic coverage and competitor analysis.</div>
+    <button class="btn btn-outline btn-sm skill-card-btn" disabled>Coming Soon</button>
+  </div>
+  <div class="skill-card">
+    <div class="skill-card-icon" style="background:#f3e8fd;color:#7c3aed;">&#127758;</div>
+    <div class="skill-card-name">GEO Visibility</div>
+    <div class="skill-card-status coming-soon">Coming Soon</div>
+    <div class="skill-card-desc">Track geographic search visibility and local market opportunities.</div>
+    <button class="btn btn-outline btn-sm skill-card-btn" disabled>Coming Soon</button>
+  </div>
+</div>
+
+<h2 style="font-size:18px;font-weight:600;margin-bottom:12px;">Recent Activity</h2>
+<div class="card">
+  {% if recent %}
+  <ul class="activity-list">
+    {% for r in recent %}
+    <li class="activity-item">
+      <div>
+        <div class="activity-kw">{{ r.params.keyword }}</div>
+        <div class="activity-meta">{{ r.params.country }} | {{ r.serp|length }} pages | {{ r.keywords|length }} keywords</div>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);">{{ r.completed_time }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="activity-empty">No research activities yet. <a href="/app/skills/keyword-research" style="color:var(--accent);">Start your first research</a> to see history here.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

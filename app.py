@@ -753,37 +753,25 @@ def run_research(keyword, country, language, num_results, task_id):
 
 @app.route('/')
 def index():
-    # Allow localhost access without payment (for testing)
-    host = request.headers.get('Host', '')
-    if 'localhost' in host or '127.0.0.1' in host:
-        gs = get_google_connection_status()
-        return render_template('index.html', paid=True, google_status=gs, version=GIT_COMMIT)
-    checkout_id = request.args.get('checkout_id', '')
-    has_access = request.cookies.get('seo_access', '') == 'granted'
-    if not has_access:
-        # Check if any keys in the license store are still active
-        paid = load_json(PAID_FILE)
-        licenses = load_json(LICS_FILE)
-        for kid, kdata in licenses.items():
-            if is_key_expired(kdata):
-                continue
-            if kid in paid and paid[kid].get('status') == 'active':
-                dur_h = kdata.get('duration_hours', 0)
-                if dur_h <= 0:
-                    continue  # single-use, already consumed via cookie
-                remaining = (kdata.get('created_at', 0) + dur_h * 3600) - time.time()
-                if remaining > 0:
-                    resp = make_response(render_template('index.html', paid=True))
-                    resp.set_cookie('seo_access', 'granted', max_age=max(300, int(remaining)))
-                    return resp
-    if checkout_id:
-        paid = load_json(PAID_FILE)
-        if checkout_id not in paid:
-            paid[checkout_id] = {'status': 'pending', 'plan': 'checkout'}
-            save_json(PAID_FILE, paid)
-        has_access = True
-    google_status = get_google_connection_status()
-    return render_template('index.html', paid=has_access, google_status=google_status, version=GIT_COMMIT)
+    gs = get_google_connection_status()
+    return render_template('public/home.html', google_status=gs, version=GIT_COMMIT)
+
+@app.route('/app')
+def app_dashboard():
+    gs = get_google_connection_status()
+    total_runs = len(RESULTS)
+    total_kw = sum(len(r.get('keywords', [])) for r in RESULTS.values() if r.get('status') == 'complete')
+    total_reports = sum(1 for r in RESULTS.values() if r.get('status') == 'complete')
+    recent = [r for r in RESULTS.values() if r.get('status') == 'complete']
+    recent.sort(key=lambda x: str(x.get('completed_time', '')), reverse=True)
+    stats = {'research_runs': total_runs, 'keywords_discovered': total_kw,
+             'reports_generated': total_reports, 'active_skill_packs': 1}
+    return render_template('app/dashboard.html', google_status=gs, stats=stats, recent=recent[:10])
+
+@app.route('/app/skills/keyword-research')
+def app_keyword_research():
+    gs = get_google_connection_status()
+    return render_template('app/keyword_research.html', google_status=gs, version=GIT_COMMIT)
 
 @app.route('/run', methods=['POST'])
 def run():
