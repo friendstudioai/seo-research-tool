@@ -695,7 +695,7 @@ def index():
     host = request.headers.get('Host', '')
     if 'localhost' in host or '127.0.0.1' in host:
         gs = get_google_connection_status()
-        return render_template('index.html', paid=True, google_status=gs)
+        return render_template('index.html', paid=True, google_status=gs, version=GIT_COMMIT)
     checkout_id = request.args.get('checkout_id', '')
     has_access = request.cookies.get('seo_access', '') == 'granted'
     if not has_access:
@@ -721,9 +721,44 @@ def index():
             save_json(PAID_FILE, paid)
         has_access = True
     google_status = get_google_connection_status()
-    return render_template('index.html', paid=has_access, google_status=google_status)
+    return render_template('index.html', paid=has_access, google_status=google_status, version=GIT_COMMIT)
 
 @app.route('/run', methods=['POST'])
+def run():
+    try:
+        kw = request.form.get('keyword', '').strip()
+        if not kw:
+            return jsonify({'error': 'Keyword is required'}), 400
+        task_id = f'task_{int(time.time())}'
+        try:
+            num = int(request.form.get('num_results', 10))
+        except (ValueError, TypeError):
+            num = 10
+        t = threading.Thread(target=run_research, args=(
+            kw, request.form.get('country', 'United States'),
+            request.form.get('language', 'English'),
+            num, task_id))
+        t.daemon = True
+        t.start()
+        return jsonify({'task_id': task_id})
+    except Exception as e:
+        return jsonify({'error': f'Research request failed ({type(e).__name__})'}), 500
+def run():
+    try:
+        kw = request.form.get('keyword', '').strip()
+        if not kw: return jsonify({'error': 'Keyword is required'}), 400
+        task_id = f'task_{int(time.time())}'
+        try:
+            num = int(request.form.get('num_results', 10))
+        except (ValueError, TypeError):
+            num = 10
+        t = threading.Thread(target=run_research, args=(
+            kw, request.form.get('country', 'United States'), request.form.get('language', 'English'),
+            num, task_id))
+        t.daemon = True; t.start()
+        return jsonify({'task_id': task_id})
+    except Exception as e:
+        return jsonify({'error': f'Research request failed ({type(e).__name__})'}), 500
 def run():
     kw = request.form.get('keyword', '').strip()
     if not kw: return jsonify({'error': 'Keyword is required'}), 400
