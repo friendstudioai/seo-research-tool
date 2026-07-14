@@ -156,14 +156,14 @@ PICKER_API_KEY = os.environ.get('GOOGLE_PICKER_API_KEY', '')
 CLOUD_PROJECT_NUMBER = os.environ.get('GOOGLE_CLOUD_PROJECT_NUMBER', '')
 GOOGLE_EXPORT_MODE = os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth')
 
-def get_flow(state=None, code_verifier=None):
+def get_flow(state=None, code_verifier=None, redirect_uri=None):
     flow = Flow.from_client_config(
         {'web': {'client_id': OAUTH_CLIENT_ID, 'client_secret': OAUTH_CLIENT_SECRET,
                   'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
                   'token_uri': 'https://oauth2.googleapis.com/token'}},
         scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets'],
         state=state, code_verifier=code_verifier)
-    flow.redirect_uri = OAUTH_REDIRECT_URI
+    flow.redirect_uri = redirect_uri or OAUTH_REDIRECT_URI
     return flow
 
 def get_google_connection_status():
@@ -1194,11 +1194,14 @@ def health():
 # --- Google OAuth Routes ---
 @app.route('/auth/google/start')
 def auth_google_start():
+    if not OAUTH_CLIENT_ID or not OAUTH_CLIENT_SECRET:
+        return redirect('/?oauth_error=oauth_not_configured')
     state = secrets.token_urlsafe(32)
     code_verifier = secrets.token_urlsafe(64)
     session['google_oauth_state'] = state
     session['google_oauth_code_verifier'] = code_verifier
-    flow = get_flow(state=state, code_verifier=code_verifier)
+    redirect_uri = OAUTH_REDIRECT_URI or (request.url_root.rstrip('/') + '/auth/google/callback')
+    flow = get_flow(state=state, code_verifier=code_verifier, redirect_uri=redirect_uri)
     u, _ = flow.authorization_url(access_type='offline', include_granted_scopes='true', prompt='consent')
     return redirect(u)
 
@@ -1219,7 +1222,8 @@ def auth_google_callback():
         return redirect('/?oauth_error=cancelled')
     print('[OAUTH_STAGE] state_valid', flush=True)
     try:
-        flow = get_flow(state=state, code_verifier=code_verifier)
+        redirect_uri = OAUTH_REDIRECT_URI or (request.url_root.rstrip('/') + '/auth/google/callback')
+        flow = get_flow(state=state, code_verifier=code_verifier, redirect_uri=redirect_uri)
         flow.fetch_token(authorization_response=request.url)
         creds = flow.credentials
         print('[OAUTH_STAGE] fetch_token_ok', flush=True)
