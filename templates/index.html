@@ -82,10 +82,13 @@
         <div id="google-connection-error" style="display:none;background:#fce4e4;color:#d32f2f;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;">Unable to load Google connection status.</div>
         <h3>Google Sheets Export</h3>
         <p>Connect your Google account to save research directly to your own Google Sheets.</p>
+        {% if not google_status or not google_status.get('connected') %}
         <div id="google-disconnected">
             <a href="/auth/google/start" class="google-btn primary">Connect Google</a>
         </div>
-        <div id="google-connected" class="hidden">
+        {% endif %}
+        {% if google_status and google_status.get('connected') %}
+        <div id="google-connected">
             <div class="google-user">
                 <img id="google-user-pic" src="" alt="" onerror="this.style.display='none'">
                 <div class="info">
@@ -112,6 +115,7 @@
                 <button class="google-btn danger" onclick="disconnectGoogle()">Disconnect Google</button>
             </div>
         </div>
+        {% endif %}
     </div>
 
     <div class="card">
@@ -180,6 +184,7 @@
     <div class="footer">Powered by Firecrawl · Google Sheets API · Version: <span id="version-display">local</span></div>
 </div>
 
+<script id="google-status-data" type="application/json">{{ google_status|tojson|safe }}</script>
 <script>
 const form = document.getElementById('research-form');
 const runBtn = document.getElementById('run-btn');
