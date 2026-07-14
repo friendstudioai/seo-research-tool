@@ -349,6 +349,7 @@ function chooseGoogleSheet() {
             var view = new google.picker.View(google.picker.ViewId.SPREADSHEETS);
             new google.picker.PickerBuilder().addView(view).setOAuthToken(d.accessToken)
                 .setDeveloperKey(d.pickerApiKey).setAppId(d.projectNumber)
+                .setSelectableMimeTypes('application/vnd.google-apps.spreadsheet')
                 .setCallback(pickerCallback).build().setVisible(true);
         });
     }).catch(function(){ showError('Unable to open sheet picker.'); });
