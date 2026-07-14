@@ -491,18 +491,21 @@ def run_research(keyword, country, language, num_results, task_id):
 
         def match_source(kw_text, serp_data):
             matched = []
+            kw_words = set(kw_text.lower().split())
             for s in serp_data:
                 text = (s['title'] + ' ' + s.get('h1', '') + ' ' + s.get('meta_description', '')).lower()
-                if kw_text.lower() in text:
-                    domain = s['url'].split('/')[2].replace('www.', '').split('.')[0] if '//' in s['url'] else ''
-                    matched.append(domain)
+                domain = s['url'].split('/')[2].replace('www.', '').split('.')[0] if '//' in s['url'] else ''
+                # Check full phrase match first (more specific)
+                full_match = kw_text.lower() in text
+                # Then check word overlap (at least 2 significant words match)
+                title_words = set(s['title'].lower().split())
+                word_overlap = len(kw_words & title_words) >= 2
+                if full_match or word_overlap:
+                    if domain:
+                        matched.append(domain)
             if matched:
                 return ', '.join(sorted(set(matched), key=lambda x: matched.index(x))[:5])
-            # Use first brand from SERP
-            for s in serp_data:
-                if '//' in s['url']:
-                    domain = s['url'].split('/')[2].replace('www.', '').split('.')[0]
-                    return domain
+            return ''
             return 'Search results'
 
         kws = []  # (keyword, type, volume, intent, cluster, page_type, slug, data_basis, source, notes)
@@ -525,7 +528,47 @@ def run_research(keyword, country, language, num_results, task_id):
             ptype = c_info['page_type']
             slug = '/' + slug_base.replace(' ', '-').lower()
             source = match_source(kw_text, serp)
+            # Auto-generate notes based on keyword properties
+            if not notes:
+                notes = _gen_kw_notes(kw_text, ktype, final_intent, cluster_key, source, serp)
             kws.append((kw_text, ktype, vol, final_intent, cluster_name, ptype, slug, data_basis, source, notes))
+
+        def _gen_kw_notes(kw_text, ktype, intent, cluster_key, source, serp_data):
+            parts = []
+            matched_pages = [s for s in serp_data if kw_text.lower() in (s['title'] + ' ' + s.get('h1', '') + ' ' + s.get('meta_description', '')).lower() or len(set(kw_text.lower().split()) & set(s['title'].lower().split())) >= 2]
+            if matched_pages:
+                domains = []
+                for s in matched_pages:
+                    if '//' in s['url']:
+                        d = s['url'].split('/')[2].replace('www.', '').split('.')[0]
+                        domains.append(d)
+                uniq = list(dict.fromkeys(domains))
+                if uniq:
+                    parts.append(f'Covered by: {", ".join(uniq[:4])}')
+            # Intent notes
+            intent_map = {'Informational': 'Educational intent, suitable for guides and tutorials', 'Commercial Investigation': 'High purchase intent, comparison-shopping behavior', 'Transactional': 'Buying intent, high commercial value'}
+            if intent in intent_map:
+                parts.append(intent_map[intent])
+            # Cluster notes
+            cluster_map = {'Basics & Definition': 'Core topic definition with high search volume', 'Type Comparison': 'Comparison opportunity across product variants', 'Selection Guide': 'Decision-making support for buyers', 'Materials & Standards': 'Technical specifications and compliance requirements', 'Industry Applications': 'Cross-industry use case exploration', 'Procurement & Suppliers': 'Sourcing and vendor discovery intent', 'Maintenance & Troubleshooting': 'After-sale support and operational guidance'}
+            if cluster_key in cluster_map:
+                parts.append(cluster_map[cluster_key])
+            # Type notes
+            if ktype == 'Long-tail':
+                parts.append('Low competition long-tail opportunity')
+            elif ktype == 'Question':
+                parts.append('Voice search and featured snippet potential')
+            elif ktype == 'Core':
+                parts.append('High relevance core keyword')
+            elif ktype == 'Related':
+                parts.append('Topically related secondary keyword')
+            # Source count
+            src_count = len(source.split(', ')) if source else 0
+            if src_count > 1:
+                parts.append(f'Multiple sources ({src_count})')
+            elif src_count == 0:
+                parts.append('AI inference: content gap opportunity')
+            return '. '.join(parts)
 
         # Core
         add_kw(kw_lower, 'Core', base_vol, '', 'Basics & Definition', kw_lower)
