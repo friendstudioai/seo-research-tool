@@ -192,18 +192,24 @@ def get_user_credentials(user):
     if not oauth: return None
     import google.oauth2.credentials
     token = decrypt_token(oauth.encrypted_access_token or '')
-    refresh = decrypt_token(oauth.encrypted_refresh_token)
-    if not refresh: return None
+    refresh = decrypt_token(oauth.encrypted_refresh_token) if oauth.encrypted_refresh_token else None
+    if not token and not refresh:
+        print(f'[AUTH] No credentials for user {user.id}', flush=True)
+        return None
     creds = google.oauth2.credentials.Credentials(
         token=token, refresh_token=refresh,
         token_uri='https://oauth2.googleapis.com/token',
         client_id=OAUTH_CLIENT_ID, client_secret=OAUTH_CLIENT_SECRET,
         scopes=oauth.granted_scopes.split(',') if oauth.granted_scopes else None)
-    if not creds.valid and creds.expired and creds.refresh_token:
-        creds.refresh(google.auth.transport.requests.Request())
-        oauth.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
-        oauth.token_expiry = creds.expiry
-        db.session.commit()
+    if refresh and (not creds.valid and creds.expired):
+        try:
+            creds.refresh(google.auth.transport.requests.Request())
+            oauth.encrypted_access_token = encrypt_token(creds.token) if creds.token else None
+            oauth.token_expiry = creds.expiry
+            db.session.commit()
+            print(f'[AUTH] Token refreshed for user {user.id}', flush=True)
+        except Exception as e:
+            print(f'[AUTH] Token refresh failed for user {user.id}', flush=True)
     return creds
 
 
@@ -783,19 +789,25 @@ def download(task_id):
 def export_sheets(task_id):
     r = RESULTS.get(task_id)
     if not r or r.get('status') != 'complete': return jsonify({'error': 'Not complete'}), 400
+    print(f'[SHEETS_EXPORT] start task={task_id}', flush=True)
     try:
         user = get_current_user()
+        print(f'[SHEETS_EXPORT] user_loaded={bool(user)}', flush=True)
         svc = get_sheets_service_for_user(user)
         if not svc: return jsonify({'error': 'Google Sheets unavailable. Set GOOGLE_SERVICE_ACCOUNT_JSON or connect Google.'}), 400
+        print(f'[SHEETS_EXPORT] svc_loaded={bool(svc)}', flush=True)
         sid = ''
         if user:
             sheet = db.session.query(SelectedSheet).filter_by(user_id=user.id).first()
             if sheet: sid = sheet.spreadsheet_id
+            print(f'[SHEETS_EXPORT] selected_sheet_loaded={bool(sheet)}', flush=True)
         if not sid:
             sid = (request.json or {}).get('sheet_id', '').strip() if request.is_json else ''
         if not sid: sid = os.environ.get('GOOGLE_SHEET_ID', '')
         if not sid: return jsonify({'error': 'No sheet selected. Choose a sheet or set GOOGLE_SHEET_ID.'}), 400
+        print(f'[SHEETS_EXPORT] write_start sheet={sid[:20]}', flush=True)
         write_to_google_sheets(svc, sid, r)
+        print(f'[SHEETS_EXPORT] write_ok', flush=True)
         return jsonify({'url': f'https://docs.google.com/spreadsheets/d/{sid}/edit', 'sheet_id': sid})
     except Exception as e: return jsonify({'error': str(e)[:300]}), 500
 def export_sheets(task_id):
@@ -1163,7 +1175,9 @@ def auth_google_callback():
         o = db.session.query(GoogleOAuthCredentials).filter_by(user_id=user.id).first()
         if not o:
             o = GoogleOAuthCredentials(user_id=user.id); db.session.add(o)
-        o.encrypted_refresh_token = encrypt_token(creds.refresh_token) if creds.refresh_token else ''
+        if creds.refresh_token:
+            o.encrypted_refresh_token = encrypt_token(creds.refresh_token)
+            print('[OAUTH_STAGE] refresh_token_saved', flush=True)
         o.encrypted_access_token = encrypt_token(creds.token) if creds.token else ''
         o.token_expiry = creds.expiry
         o.granted_scopes = ','.join(creds.scopes) if creds.scopes else ''
@@ -1263,17 +1277,21 @@ def api_google_create_sheet():
 # --- Updated sheets helper ---
 def get_sheets_service_for_user(user):
     mode = os.environ.get('GOOGLE_EXPORT_MODE', 'user_oauth')
-    if mode == 'user_oauth' and user:
+    if mode == 'user_oauth':
+        if not user:
+            return None
         c = get_user_credentials(user)
         if c:
             from googleapiclient.discovery import build
             return build('sheets', 'v4', credentials=c, cache_discovery=False)
-    sa = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
-    if sa:
-        import json
-        from google.oauth2.service_account import Credentials as SAC
-        from googleapiclient.discovery import build
-        return build('sheets', 'v4', credentials=SAC.from_service_account_info(json.loads(sa), scopes=['https://www.googleapis.com/auth/spreadsheets']), cache_discovery=False)
+        return None
+    if mode == 'service_account':
+        sa = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+        if sa:
+            import json
+            from google.oauth2.service_account import Credentials as SAC
+            from googleapiclient.discovery import build
+            return build('sheets', 'v4', credentials=SAC.from_service_account_info(json.loads(sa), scopes=['https://www.googleapis.com/auth/spreadsheets']), cache_discovery=False)
     return None
 
 
